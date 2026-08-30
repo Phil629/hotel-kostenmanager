@@ -98,41 +98,41 @@ export async function learnRuleFromAssignment(
   let createdRulesCount = 0;
   let primaryPattern = '';
 
-  // 1. Create IBAN rule if IBAN exists
+  // 1. Create or update IBAN rule if IBAN exists
   if (cleanIban && cleanIban.length > 5) {
     primaryPattern = cleanIban;
     const existingIbanRule = await prisma.rule.findFirst({
-      where: { categoryId, matchType: 'IBAN', pattern: cleanIban },
+      where: { matchType: 'IBAN', pattern: cleanIban },
     });
     if (!existingIbanRule) {
       await prisma.rule.create({
         data: { categoryId, matchType: 'IBAN', pattern: cleanIban, isAuto: true, isApproved },
       });
       createdRulesCount++;
-    } else if (!existingIbanRule.isApproved && isApproved) {
+    } else {
       await prisma.rule.update({
         where: { id: existingIbanRule.id },
-        data: { isApproved: true },
+        data: { categoryId, isApproved: isApproved || existingIbanRule.isApproved },
       });
     }
   }
 
-  // 2. Create PAYEE or KEYWORD rule
+  // 2. Create or update PAYEE or KEYWORD rule
   const { matchType, pattern } = extractCleanPattern(payee, description);
   if (pattern) {
     if (!primaryPattern) primaryPattern = pattern;
     const existingPayeeRule = await prisma.rule.findFirst({
-      where: { categoryId, matchType, pattern },
+      where: { matchType, pattern },
     });
     if (!existingPayeeRule) {
       await prisma.rule.create({
         data: { categoryId, matchType, pattern, isAuto: true, isApproved },
       });
       createdRulesCount++;
-    } else if (!existingPayeeRule.isApproved && isApproved) {
+    } else {
       await prisma.rule.update({
         where: { id: existingPayeeRule.id },
-        data: { isApproved: true },
+        data: { categoryId, isApproved: isApproved || existingPayeeRule.isApproved },
       });
     }
   }
