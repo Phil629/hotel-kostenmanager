@@ -1,0 +1,71 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Category {
+  id           String        @id @default(uuid())
+  name         String        @unique
+  color        String        @default("#3b82f6")
+  icon         String?
+  isHotelCore  Boolean       @default(true)
+  description  String?
+  rules        Rule[]
+  transactions Transaction[]
+  budgets      Budget[]
+  createdAt    DateTime      @default(now())
+}
+
+model Rule {
+  id           String        @id @default(uuid())
+  categoryId   String
+  category     Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  matchType    String        // "IBAN", "PAYEE", "KEYWORD"
+  pattern      String
+  isAuto       Boolean       @default(true)
+  isApproved   Boolean       @default(true) // Rules must be approved to automatically categorize transactions
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+}
+
+model Transaction {
+  id            String    @id @default(uuid())
+  date          DateTime
+  amount        Float     // Negative for expense, positive for income
+  payee         String?
+  iban          String?
+  description   String
+  status        String    @default("UNCATEGORIZED") // "CATEGORIZED", "UNCATEGORIZED"
+  categoryId    String?
+  category      Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  matchedRuleId String?
+  matchedRule   Rule?     @relation(fields: [matchedRuleId], references: [id], onDelete: SetNull)
+  rawHash       String    @unique
+  createdAt     DateTime  @default(now())
+}
+
+model Budget {
+  id           String   @id @default(uuid())
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  monthlyLimit Float
+  monthYear    String   // "YYYY-MM"
+  createdAt    DateTime @default(now())
+
+  @@unique([categoryId, monthYear])
+}
+
+model Settings {
+  id              String   @id @default("default")
+  telegramToken   String?
+  telegramChatId  String?
+  emailAddress    String?
+  hotelName       String   @default("Parkhotel & Restaurant")
+  autoSendReports Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+}
