@@ -234,7 +234,7 @@ export default function Dashboard() {
       ) : (
         <>
           {/* KPI Stat Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
               <div className="flex items-center justify-between text-slate-500 text-sm font-medium">
                 <span>Gesamtausgaben</span>
@@ -245,32 +245,6 @@ export default function Dashboard() {
               </div>
               <div className="text-xs text-slate-500 mt-1">
                 {data.summary.transactionCount} Transaktionen ({selectedMonth === 'all' ? 'Alle Monate' : selectedMonth})
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 text-sm font-medium">
-                <span>F&B (Gastronomie)</span>
-                <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg text-lg">🍷</span>
-              </div>
-              <div className="text-2xl font-bold text-slate-900 mt-3">
-                {formatEuro(data.summary.fnbTotal)}
-              </div>
-              <div className="text-xs text-emerald-600 mt-1 font-medium">
-                Lebensmittel & Getränke
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-              <div className="flex items-center justify-between text-slate-500 text-sm font-medium">
-                <span>OTA Provisionen</span>
-                <span className="p-2 bg-cyan-50 text-cyan-600 rounded-lg text-lg">🏨</span>
-              </div>
-              <div className="text-2xl font-bold text-slate-900 mt-3">
-                {formatEuro(data.summary.otaTotal)}
-              </div>
-              <div className="text-xs text-cyan-600 mt-1 font-medium">
-                Booking, Expedia & HRS
               </div>
             </div>
 
