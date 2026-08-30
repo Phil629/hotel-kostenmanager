@@ -226,7 +226,7 @@ export default function RulesPage() {
       );
 
       setDeletingRule(null);
-      if (editingRule?.id === deletingRule.id) setEditingRule(null);
+      setEditingRule(null);
       fetchRules();
     } catch (e) {
       console.error(e);
@@ -324,10 +324,10 @@ export default function RulesPage() {
 
                   <button
                     onClick={() => setDeletingRule(rule)}
-                    className="px-2 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-semibold rounded-lg transition"
+                    className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-bold rounded-lg transition border border-rose-200"
                     title="Regel ablehnen / löschen"
                   >
-                    ❌
+                    ❌ Ablehnen
                   </button>
                 </div>
               </div>
@@ -593,69 +593,6 @@ export default function RulesPage() {
         )}
       </div>
 
-      {/* Deletion Choice Modal */}
-      {deletingRule && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-bold text-slate-900">
-                ❌ Regel "{deletingRule.pattern}" ablehnen / löschen
-              </h3>
-              <button onClick={() => setDeletingRule(null)} className="text-slate-400 hover:text-slate-600 font-bold">
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Wie möchten Sie mit den <b>{deletingRule.matchingCount} verknüpften Buchungen</b> verfahren, die dieser Regel zugewiesen sind?
-            </p>
-
-            <div className="space-y-3">
-              <button
-                onClick={() => executeDeleteRule(false)}
-                disabled={deletingLoading}
-                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-left transition flex items-start gap-3 group"
-              >
-                <span className="text-lg">📌</span>
-                <div>
-                  <span className="font-bold text-xs text-slate-900 block group-hover:text-blue-600">
-                    Bisherige Kategorien BEIBEHALTEN
-                  </span>
-                  <span className="text-[11px] text-slate-500 block mt-0.5">
-                    Die Regel wird gelöscht, aber bereits zugeordnete Buchungen behalten ihre jetzige Kategorie.
-                  </span>
-                </div>
-              </button>
-
-              <button
-                onClick={() => executeDeleteRule(true)}
-                disabled={deletingLoading}
-                className="w-full p-4 bg-rose-50 hover:bg-rose-100/70 border border-rose-200 rounded-xl text-left transition flex items-start gap-3 group"
-              >
-                <span className="text-lg">↩️</span>
-                <div>
-                  <span className="font-bold text-xs text-rose-900 block">
-                    Alle Buchungen auf UNKATEGORISIERT zurücksetzen
-                  </span>
-                  <span className="text-[11px] text-rose-700 block mt-0.5">
-                    Löscht die Regel UND setzt alle {deletingRule.matchingCount} verknüpften Buchungen wieder auf unkategorisiert zurück.
-                  </span>
-                </div>
-              </button>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setDeletingRule(null)}
-                className="px-4 py-2 text-slate-600 text-xs font-semibold hover:bg-slate-100 rounded-xl transition"
-              >
-                Abbrechen
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Rich Transparent Rule Detail & Approval Modal */}
       {editingRule && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
@@ -815,6 +752,72 @@ export default function RulesPage() {
                   {savingRule ? 'Speichere...' : `✅ Freigeben & ${selectedTxIds.size} Buchungen umstellen`}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Deletion Choice Modal (Higher z-index z-60 so it always stays on top of detail modal) */}
+      {deletingRule && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-60">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-bold text-slate-900">
+                ❌ Regel "{deletingRule.pattern}" ablehnen / löschen
+              </h3>
+              <button onClick={() => setDeletingRule(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Wie möchten Sie mit den <b>{deletingRule.matchingCount} verknüpften Buchungen</b> verfahren, die dieser Regel zugewiesen sind?
+            </p>
+
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => executeDeleteRule(false)}
+                disabled={deletingLoading}
+                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-left transition flex items-start gap-3 group cursor-pointer"
+              >
+                <span className="text-lg">📌</span>
+                <div>
+                  <span className="font-bold text-xs text-slate-900 block group-hover:text-blue-600">
+                    Bisherige Kategorien BEIBEHALTEN
+                  </span>
+                  <span className="text-[11px] text-slate-500 block mt-0.5">
+                    Die Regel wird gelöscht, aber bereits zugeordnete Buchungen behalten ihre jetzige Kategorie.
+                  </span>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => executeDeleteRule(true)}
+                disabled={deletingLoading}
+                className="w-full p-4 bg-rose-50 hover:bg-rose-100/70 border border-rose-200 rounded-xl text-left transition flex items-start gap-3 group cursor-pointer"
+              >
+                <span className="text-lg">↩️</span>
+                <div>
+                  <span className="font-bold text-xs text-rose-900 block">
+                    Alle Buchungen auf UNKATEGORISIERT zurücksetzen
+                  </span>
+                  <span className="text-[11px] text-rose-700 block mt-0.5">
+                    Löscht die Regel UND setzt alle {deletingRule.matchingCount} verknüpften Buchungen wieder auf unkategorisiert zurück.
+                  </span>
+                </div>
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingRule(null)}
+                className="px-4 py-2 text-slate-600 text-xs font-semibold hover:bg-slate-100 rounded-xl transition"
+              >
+                Abbrechen
+              </button>
             </div>
           </div>
         </div>
