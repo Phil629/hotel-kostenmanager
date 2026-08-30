@@ -731,15 +731,19 @@ export default function RulesPage() {
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setDeletingRule(editingRule)}
-                  className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200"
+                  onClick={() => {
+                    const r = editingRule;
+                    setEditingRule(null);
+                    setDeletingRule(r);
+                  }}
+                  className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
                 >
                   ❌ Ablehnen / Löschen...
                 </button>
 
                 <button
                   onClick={() => setEditingRule(null)}
-                  className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition"
+                  className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition cursor-pointer"
                 >
                   Abbrechen
                 </button>
@@ -747,7 +751,7 @@ export default function RulesPage() {
                 <button
                   onClick={handleSaveAndApproveRule}
                   disabled={savingRule}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                 >
                   {savingRule ? 'Speichere...' : `✅ Freigeben & ${selectedTxIds.size} Buchungen umstellen`}
                 </button>
@@ -757,9 +761,9 @@ export default function RulesPage() {
         </div>
       )}
 
-      {/* Deletion Choice Modal (Higher z-index z-60 so it always stays on top of detail modal) */}
+      {/* Deletion Choice Modal */}
       {deletingRule && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-60">
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-lg font-bold text-slate-900">
@@ -814,7 +818,7 @@ export default function RulesPage() {
               <button
                 type="button"
                 onClick={() => setDeletingRule(null)}
-                className="px-4 py-2 text-slate-600 text-xs font-semibold hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-slate-600 text-xs font-semibold hover:bg-slate-100 rounded-xl transition cursor-pointer"
               >
                 Abbrechen
               </button>
