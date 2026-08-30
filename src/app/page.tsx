@@ -442,7 +442,7 @@ export default function Dashboard() {
                           </div>
                         ) : (
                           <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
-                            {cat.transactions.map((tx) => (
+                            {[...cat.transactions].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).map((tx) => (
                               <div
                                 key={tx.id}
                                 className="p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-slate-50 transition"
