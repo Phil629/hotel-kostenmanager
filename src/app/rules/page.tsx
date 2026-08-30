@@ -116,8 +116,10 @@ export default function RulesPage() {
     }
   };
 
-  // 0ms Optimistic Direct Approval
+  // 0ms Optimistic Direct Approval with Automatic Rollback Protection
   const handleApproveRuleDirect = async (rule: Rule) => {
+    const previousRules = [...rules];
+
     // 0ms Optimistic UI update
     setRules((prev) =>
       prev.map((r) => (r.id === rule.id ? { ...r, isApproved: true } : r))
@@ -126,7 +128,7 @@ export default function RulesPage() {
 
     try {
       const txIds = rule.matchingTransactions.map((t) => t.id);
-      await fetch('/api/rules', {
+      const res = await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -135,9 +137,17 @@ export default function RulesPage() {
           updateTransactionIds: txIds,
         }),
       });
+
+      if (!res.ok) {
+        throw new Error('Fehler beim Speichern der Freigabe auf dem Server');
+      }
+
       fetchRules(true);
     } catch (e) {
-      console.error(e);
+      console.error('Fehler beim Speichern der Regel:', e);
+      // Rollback to original state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Verbindungsfehler: Regel "${rule.pattern}" konnte nicht gespeichert werden. Änderung wurde wiederhergestellt.`);
     }
   };
 
@@ -174,10 +184,11 @@ export default function RulesPage() {
     }
   };
 
-  // 0ms Optimistic Save & Approve from Modal
+  // 0ms Optimistic Save & Approve from Modal with Rollback
   const handleSaveAndApproveRule = async () => {
     if (!editingRule || !targetCategoryId) return;
 
+    const previousRules = [...rules];
     const ruleId = editingRule.id;
     const targetCat = categories.find((c) => c.id === targetCategoryId) || editingRule.category;
 
@@ -202,7 +213,7 @@ export default function RulesPage() {
 
     try {
       const updateTransactionIds = Array.from(selectedTxIds);
-      await fetch('/api/rules', {
+      const res = await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -214,16 +225,25 @@ export default function RulesPage() {
           updateTransactionIds,
         }),
       });
+
+      if (!res.ok) {
+        throw new Error('Fehler beim Speichern der Regel auf dem Server');
+      }
+
       fetchRules(true);
     } catch (e) {
       console.error(e);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Fehler beim Speichern der Regel "${editPattern}". Änderung wurde wiederhergestellt.`);
     }
   };
 
-  // 0ms Optimistic Rule Rejection / Deletion
+  // 0ms Optimistic Rule Rejection / Deletion with Rollback
   const handleExecuteReject = async (resetTransactions: boolean) => {
     if (!editingRule) return;
 
+    const previousRules = [...rules];
     const ruleId = editingRule.id;
     const rulePattern = editingRule.pattern;
 
@@ -239,28 +259,46 @@ export default function RulesPage() {
     );
 
     try {
-      await fetch(`/api/rules?id=${ruleId}&reset=${resetTransactions}`, {
+      const res = await fetch(`/api/rules?id=${ruleId}&reset=${resetTransactions}`, {
         method: 'DELETE',
       });
+
+      if (!res.ok) {
+        throw new Error('Fehler beim Löschen der Regel auf dem Server');
+      }
+
       fetchRules(true);
     } catch (e) {
       console.error(e);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rulePattern}". Die Regel wurde wiederhergestellt.`);
     }
   };
 
-  // 0ms Direct Table Delete Button
+  // 0ms Direct Table Delete Button with Rollback
   const handleDirectDelete = async (rule: Rule) => {
+    const previousRules = [...rules];
+
     // 0ms Optimistic Removal
     setRules((prev) => prev.filter((r) => r.id !== rule.id));
     setToastMsg(`❌ Regel "${rule.pattern}" gelöscht.`);
 
     try {
-      await fetch(`/api/rules?id=${rule.id}&reset=false`, {
+      const res = await fetch(`/api/rules?id=${rule.id}&reset=false`, {
         method: 'DELETE',
       });
+
+      if (!res.ok) {
+        throw new Error('Fehler beim Löschen der Regel auf dem Server');
+      }
+
       fetchRules(true);
     } catch (e) {
       console.error(e);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rule.pattern}". Die Regel wurde wiederhergestellt.`);
     }
   };
 
