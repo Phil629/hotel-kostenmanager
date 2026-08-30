@@ -271,7 +271,7 @@ export default function RulesPage() {
       {toastMsg && (
         <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs">
           <span>{toastMsg}</span>
-          <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+          <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
             ✕
           </button>
         </div>
@@ -286,7 +286,7 @@ export default function RulesPage() {
             </span>
             <button
               onClick={() => setFilterApproval('pending')}
-              className="text-xs text-amber-900 font-bold underline hover:text-amber-950"
+              className="text-xs text-amber-900 font-bold underline hover:text-amber-950 cursor-pointer"
             >
               Zeige alle {pendingRules.length} ausstehenden Vorschläge in der Tabelle ↓
             </button>
@@ -305,19 +305,20 @@ export default function RulesPage() {
                   </span>
                 </div>
 
+                {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Ablehnen */}
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleApproveRuleDirect(rule)}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    ✅ Freigeben
-                  </button>
-
                   <button
                     onClick={() => openApprovalDetailModal(rule)}
                     className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
                   >
                     🔍 Details
+                  </button>
+
+                  <button
+                    onClick={() => handleApproveRuleDirect(rule)}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
+                  >
+                    ✅ Freigeben
                   </button>
 
                   <button
@@ -559,7 +560,15 @@ export default function RulesPage() {
                       </button>
                     </td>
 
+                    {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Löschen */}
                     <td className="px-6 py-4 text-right space-x-2">
+                      <button
+                        onClick={() => openApprovalDetailModal(rule)}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
+                      >
+                        🔍 Details
+                      </button>
+
                       {!rule.isApproved && (
                         <button
                           onClick={() => handleApproveRuleDirect(rule)}
@@ -568,13 +577,6 @@ export default function RulesPage() {
                           ✅ Freigeben
                         </button>
                       )}
-
-                      <button
-                        onClick={() => openApprovalDetailModal(rule)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition cursor-pointer"
-                      >
-                        ✏️ Bearbeiten
-                      </button>
 
                       <button
                         onClick={() => openApprovalDetailModal(rule, undefined, true)}
