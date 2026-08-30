@@ -561,7 +561,7 @@ export default function TransactionsPage() {
                         )}
                       </td>
 
-                      <td className="px-6 py-4 max-w-xs truncate text-slate-600 text-xs" title={tx.description}>
+                      <td className="px-6 py-4 max-w-md whitespace-normal break-words text-slate-600 text-xs">
                         {tx.description}
                       </td>
 
