@@ -43,7 +43,6 @@ export default function Dashboard() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
-  const [seedLoading, setSeedLoading] = useState(false);
 
   const fetchStats = async (monthVal = selectedMonth) => {
     setLoading(true);
@@ -69,18 +68,6 @@ export default function Dashboard() {
     return () => window.removeEventListener('focus', handleFocus);
   }, [selectedMonth]);
 
-  const handleSeedSample = async () => {
-    setSeedLoading(true);
-    try {
-      await fetch('/api/seed-sample', { method: 'POST' });
-      await fetchStats(selectedMonth);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSeedLoading(false);
-    }
-  };
-
   const formatEuro = (num: number) => {
     return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
   };
@@ -97,14 +84,6 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleSeedSample}
-            disabled={seedLoading}
-            className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium rounded-xl transition border border-indigo-200 flex items-center gap-2"
-          >
-            {seedLoading ? 'Lade Daten...' : '🧪 Demo-Daten laden'}
-          </button>
-
           <Link
             href="/transactions"
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl shadow-xs transition flex items-center gap-2"
