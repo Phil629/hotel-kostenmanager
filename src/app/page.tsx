@@ -330,7 +330,7 @@ export default function Dashboard() {
 
               {/* Legend Grid */}
               <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100 text-xs">
-                {data.pieChartData.slice(0, 8).map((item) => (
+                {data.pieChartData.map((item) => (
                   <div key={item.name} className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-50">
                     <div className="flex items-center gap-2 truncate">
                       <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
