@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     const allTransactions = await prisma.transaction.findMany({
       where: { amount: { lt: 0 } },
       include: { category: true },
-      orderBy: { date: 'asc' },
+      orderBy: { date: 'desc' },
     });
 
     const monthNamesGerman: Record<string, string> = {
@@ -61,7 +61,25 @@ export async function GET(req: NextRequest) {
 
     const totalExpense = filteredTransactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
 
-    const categoryMap: Record<string, { id: string; name: string; amount: number; color: string; count: number }> = {};
+    const categoryMap: Record<
+      string,
+      {
+        id: string;
+        name: string;
+        amount: number;
+        color: string;
+        count: number;
+        transactions: Array<{
+          id: string;
+          date: string;
+          payee: string | null;
+          iban: string | null;
+          description: string;
+          amount: number;
+          categoryId: string | null;
+        }>;
+      }
+    > = {};
 
     for (const t of filteredTransactions) {
       const catName = t.category?.name || 'Unkategorisiert';
@@ -75,11 +93,21 @@ export async function GET(req: NextRequest) {
           amount: 0,
           color: catColor,
           count: 0,
+          transactions: [],
         };
       }
 
       categoryMap[catName].amount += Math.abs(t.amount);
       categoryMap[catName].count += 1;
+      categoryMap[catName].transactions.push({
+        id: t.id,
+        date: typeof t.date === 'string' ? t.date : t.date.toISOString(),
+        payee: t.payee,
+        iban: t.iban,
+        description: t.description,
+        amount: t.amount,
+        categoryId: t.categoryId,
+      });
     }
 
     const pieChartData = Object.values(categoryMap)

@@ -48,23 +48,20 @@ export default function RulesPage() {
   const [pattern, setPattern] = useState('');
   const [addingRule, setAddingRule] = useState(false);
 
-  // Modal State for Rule Detail, Approval & Bulk Transaction Assignment
+  // Unified Single Modal State
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [targetCategoryId, setTargetCategoryId] = useState<string>('');
   const [editPattern, setEditPattern] = useState<string>('');
   const [editMatchType, setEditMatchType] = useState<'IBAN' | 'PAYEE' | 'KEYWORD'>('KEYWORD');
   const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
   const [savingRule, setSavingRule] = useState(false);
-
-  // Deletion Choice Modal State
-  const [deletingRule, setDeletingRule] = useState<Rule | null>(null);
-  const [deletingLoading, setDeletingLoading] = useState(false);
+  const [showInlineRejectOptions, setShowInlineRejectOptions] = useState(false);
 
   // Toast / Notification Message
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  const fetchRules = async () => {
-    setLoading(true);
+  const fetchRules = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/rules');
       const data = await res.json();
@@ -72,7 +69,7 @@ export default function RulesPage() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -110,7 +107,7 @@ export default function RulesPage() {
       if (data.success) {
         setPattern('');
         setToastMsg(`✅ Regel "${pattern}" manuell angelegt, freigegeben & auf ${data.appliedCount} Umsätze angewendet!`);
-        fetchRules();
+        fetchRules(true);
       }
     } catch (e) {
       console.error(e);
@@ -119,7 +116,16 @@ export default function RulesPage() {
     }
   };
 
+  // 0ms Optimistic Direct Approval with Automatic Rollback Protection
   const handleApproveRuleDirect = async (rule: Rule) => {
+    const previousRules = [...rules];
+
+    // 0ms Optimistic UI update
+    setRules((prev) =>
+      prev.map((r) => (r.id === rule.id ? { ...r, isApproved: true } : r))
+    );
+    setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & Buchungen zugeordnet!`);
+
     try {
       const txIds = rule.matchingTransactions.map((t) => t.id);
       const res = await fetch('/api/rules', {
@@ -132,21 +138,25 @@ export default function RulesPage() {
         }),
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & ${data.updatedTxCount} Buchungen zugeordnet!`);
-        fetchRules();
+      if (!res.ok) {
+        throw new Error('Fehler beim Speichern der Freigabe auf dem Server');
       }
+
+      fetchRules(true);
     } catch (e) {
-      console.error(e);
+      console.error('Fehler beim Speichern der Regel:', e);
+      // Rollback to original state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Verbindungsfehler: Regel "${rule.pattern}" konnte nicht gespeichert werden. Änderung wurde wiederhergestellt.`);
     }
   };
 
-  const openApprovalDetailModal = (rule: Rule, newCatId?: string) => {
+  const openApprovalDetailModal = (rule: Rule, newCatId?: string, openRejectImmediately = false) => {
     setEditingRule(rule);
     setTargetCategoryId(newCatId || rule.category?.id || categories[0]?.id || '');
     setEditPattern(rule.pattern);
     setEditMatchType(rule.matchType);
+    setShowInlineRejectOptions(openRejectImmediately);
 
     const allIds = new Set((rule.matchingTransactions || []).map((t) => t.id));
     setSelectedTxIds(allIds);
@@ -174,64 +184,121 @@ export default function RulesPage() {
     }
   };
 
+  // 0ms Optimistic Save & Approve from Modal with Rollback
   const handleSaveAndApproveRule = async () => {
     if (!editingRule || !targetCategoryId) return;
 
-    setSavingRule(true);
+    const previousRules = [...rules];
+    const ruleId = editingRule.id;
+    const targetCat = categories.find((c) => c.id === targetCategoryId) || editingRule.category;
+
+    // 0ms Optimistic UI Update
+    setRules((prev) =>
+      prev.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              pattern: editPattern,
+              matchType: editMatchType,
+              category: targetCat,
+              isApproved: true,
+            }
+          : r
+      )
+    );
+
+    setEditingRule(null);
+    setShowInlineRejectOptions(false);
+    setToastMsg(`✅ Regel "${editPattern}" freigegeben & Buchungen neu kategorisiert!`);
+
     try {
       const updateTransactionIds = Array.from(selectedTxIds);
-
       const res = await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: editingRule.id,
+          id: ruleId,
           categoryId: targetCategoryId,
           matchType: editMatchType,
           pattern: editPattern,
-          isApproved: true, // Freigeben & Aktivieren
+          isApproved: true,
           updateTransactionIds,
         }),
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setToastMsg(
-          `✅ Regel "${editPattern}" freigegeben & ${data.updatedTxCount} Buchungen neu kategorisiert!`
-        );
-        setEditingRule(null);
-        fetchRules();
+      if (!res.ok) {
+        throw new Error('Fehler beim Speichern der Regel auf dem Server');
       }
+
+      fetchRules(true);
     } catch (e) {
       console.error(e);
-    } finally {
-      setSavingRule(false);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Fehler beim Speichern der Regel "${editPattern}". Änderung wurde wiederhergestellt.`);
     }
   };
 
-  // Perform Delete with Option to Reset or Keep Categories
-  const executeDeleteRule = async (resetTransactions: boolean) => {
-    if (!deletingRule) return;
+  // 0ms Optimistic Rule Rejection / Deletion with Rollback
+  const handleExecuteReject = async (resetTransactions: boolean) => {
+    if (!editingRule) return;
 
-    setDeletingLoading(true);
+    const previousRules = [...rules];
+    const ruleId = editingRule.id;
+    const rulePattern = editingRule.pattern;
+
+    // 0ms Optimistic Instant Removal from State
+    setRules((prev) => prev.filter((r) => r.id !== ruleId));
+    setEditingRule(null);
+    setShowInlineRejectOptions(false);
+
+    setToastMsg(
+      resetTransactions
+        ? `❌ Regel "${rulePattern}" gelöscht & Buchungen auf UNKATEGORISIERT zurückgesetzt.`
+        : `❌ Regel "${rulePattern}" gelöscht (bisherige Kategorien beibehalten).`
+    );
+
     try {
-      await fetch(`/api/rules?id=${deletingRule.id}&reset=${resetTransactions}`, {
+      const res = await fetch(`/api/rules?id=${ruleId}&reset=${resetTransactions}`, {
         method: 'DELETE',
       });
 
-      setToastMsg(
-        resetTransactions
-          ? `❌ Regel "${deletingRule.pattern}" gelöscht & Buchungen auf UNKATEGORISIERT zurückgesetzt.`
-          : `❌ Regel "${deletingRule.pattern}" gelöscht (bisherige Kategorien beibehalten).`
-      );
+      if (!res.ok) {
+        throw new Error('Fehler beim Löschen der Regel auf dem Server');
+      }
 
-      setDeletingRule(null);
-      setEditingRule(null);
-      fetchRules();
+      fetchRules(true);
     } catch (e) {
       console.error(e);
-    } finally {
-      setDeletingLoading(false);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rulePattern}". Die Regel wurde wiederhergestellt.`);
+    }
+  };
+
+  // 0ms Direct Table Delete Button with Rollback
+  const handleDirectDelete = async (rule: Rule) => {
+    const previousRules = [...rules];
+
+    // 0ms Optimistic Removal
+    setRules((prev) => prev.filter((r) => r.id !== rule.id));
+    setToastMsg(`❌ Regel "${rule.pattern}" gelöscht.`);
+
+    try {
+      const res = await fetch(`/api/rules?id=${rule.id}&reset=false`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        throw new Error('Fehler beim Löschen der Regel auf dem Server');
+      }
+
+      fetchRules(true);
+    } catch (e) {
+      console.error(e);
+      // Rollback state if server request failed!
+      setRules(previousRules);
+      setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rule.pattern}". Die Regel wurde wiederhergestellt.`);
     }
   };
 
@@ -271,9 +338,9 @@ export default function RulesPage() {
       </div>
 
       {toastMsg && (
-        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs">
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs animate-in fade-in duration-150">
           <span>{toastMsg}</span>
-          <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+          <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
             ✕
           </button>
         </div>
@@ -288,7 +355,7 @@ export default function RulesPage() {
             </span>
             <button
               onClick={() => setFilterApproval('pending')}
-              className="text-xs text-amber-900 font-bold underline hover:text-amber-950"
+              className="text-xs text-amber-900 font-bold underline hover:text-amber-950 cursor-pointer"
             >
               Zeige alle {pendingRules.length} ausstehenden Vorschläge in der Tabelle ↓
             </button>
@@ -298,7 +365,7 @@ export default function RulesPage() {
             {pendingRules.slice(0, 10).map((rule) => (
               <div
                 key={rule.id}
-                className="bg-white p-4 rounded-xl border border-amber-200 flex items-center justify-between shadow-2xs"
+                className="bg-white p-4 rounded-xl border border-amber-200 flex items-center justify-between shadow-2xs transition-all duration-150"
               >
                 <div>
                   <span className="font-bold text-slate-900 block text-sm">{rule.pattern}</span>
@@ -307,24 +374,25 @@ export default function RulesPage() {
                   </span>
                 </div>
 
+                {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Ablehnen */}
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleApproveRuleDirect(rule)}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition shadow-xs"
-                  >
-                    ✅ Freigeben
-                  </button>
-
-                  <button
                     onClick={() => openApprovalDetailModal(rule)}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
                   >
                     🔍 Details
                   </button>
 
                   <button
-                    onClick={() => setDeletingRule(rule)}
-                    className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-bold rounded-lg transition border border-rose-200"
+                    onClick={() => handleApproveRuleDirect(rule)}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
+                  >
+                    ✅ Freigeben
+                  </button>
+
+                  <button
+                    onClick={() => openApprovalDetailModal(rule, undefined, true)}
+                    className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-bold rounded-lg transition border border-rose-200 cursor-pointer"
                     title="Regel ablehnen / löschen"
                   >
                     ❌ Ablehnen
@@ -345,7 +413,7 @@ export default function RulesPage() {
             <select
               value={matchType}
               onChange={(e) => setMatchType(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
               <option value="KEYWORD">Stichwort / Text</option>
               <option value="PAYEE">Lieferanten-Name</option>
@@ -369,7 +437,7 @@ export default function RulesPage() {
             <select
               value={selectedCatId}
               onChange={(e) => setSelectedCatId(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -383,7 +451,7 @@ export default function RulesPage() {
             <button
               type="submit"
               disabled={addingRule || !pattern.trim()}
-              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition shadow-xs disabled:opacity-50"
+              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition shadow-xs disabled:opacity-50 cursor-pointer"
             >
               {addingRule ? 'Speichere...' : 'Regel freigeben & anwenden'}
             </button>
@@ -410,7 +478,7 @@ export default function RulesPage() {
           <div className="flex items-center bg-slate-100 p-1 rounded-xl">
             <button
               onClick={() => setFilterApproval('approved')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                 filterApproval === 'approved'
                   ? 'bg-white text-emerald-800 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -420,7 +488,7 @@ export default function RulesPage() {
             </button>
             <button
               onClick={() => setFilterApproval('pending')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                 filterApproval === 'pending'
                   ? 'bg-amber-500 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -430,7 +498,7 @@ export default function RulesPage() {
             </button>
             <button
               onClick={() => setFilterApproval('all')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                 filterApproval === 'all'
                   ? 'bg-white text-slate-900 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
@@ -446,7 +514,7 @@ export default function RulesPage() {
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
               <option value="all">Alle Kategorien</option>
               {categories.map((c) => (
@@ -463,7 +531,7 @@ export default function RulesPage() {
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
               <option value="all">Alle Typen</option>
               <option value="IBAN">🏦 IBAN</option>
@@ -554,33 +622,34 @@ export default function RulesPage() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <button
                         onClick={() => openApprovalDetailModal(rule)}
-                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5"
+                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer"
                       >
                         <span>🔗 {rule.matchingCount} Buchungen</span>
                         <span className="text-slate-400">→</span>
                       </button>
                     </td>
 
+                    {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Löschen */}
                     <td className="px-6 py-4 text-right space-x-2">
+                      <button
+                        onClick={() => openApprovalDetailModal(rule)}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
+                      >
+                        🔍 Details
+                      </button>
+
                       {!rule.isApproved && (
                         <button
                           onClick={() => handleApproveRuleDirect(rule)}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition"
+                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
                         >
                           ✅ Freigeben
                         </button>
                       )}
 
                       <button
-                        onClick={() => openApprovalDetailModal(rule)}
-                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition"
-                      >
-                        ✏️ Bearbeiten
-                      </button>
-
-                      <button
-                        onClick={() => setDeletingRule(rule)}
-                        className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 hover:bg-red-50 rounded-lg transition"
+                        onClick={() => handleDirectDelete(rule)}
+                        className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 hover:bg-red-50 rounded-lg transition cursor-pointer"
                       >
                         Löschen
                       </button>
@@ -593,7 +662,7 @@ export default function RulesPage() {
         )}
       </div>
 
-      {/* Rich Transparent Rule Detail & Approval Modal */}
+      {/* Fully Unified Single Rule Detail & Approval Modal */}
       {editingRule && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
@@ -608,7 +677,13 @@ export default function RulesPage() {
                   </span>
                 )}
               </div>
-              <button onClick={() => setEditingRule(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+              <button
+                onClick={() => {
+                  setEditingRule(null);
+                  setShowInlineRejectOptions(false);
+                }}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
                 ✕
               </button>
             </div>
@@ -621,7 +696,7 @@ export default function RulesPage() {
                   <select
                     value={editMatchType}
                     onChange={(e) => setEditMatchType(e.target.value as any)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
                   >
                     <option value="KEYWORD">Stichwort / Text</option>
                     <option value="PAYEE">Lieferanten-Name</option>
@@ -644,7 +719,7 @@ export default function RulesPage() {
                   <select
                     value={targetCategoryId}
                     onChange={(e) => setTargetCategoryId(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-blue-600"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-blue-600 cursor-pointer"
                   >
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -665,7 +740,7 @@ export default function RulesPage() {
                 <button
                   type="button"
                   onClick={toggleSelectAllTxs}
-                  className="text-xs font-semibold text-blue-600 hover:underline"
+                  className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
                 >
                   {selectedTxIds.size === editingRule.matchingTransactions.length
                     ? 'Alle Haken entfernen'
@@ -722,106 +797,89 @@ export default function RulesPage() {
               </div>
             </div>
 
-            {/* Modal Bottom Actions */}
-            <div className="flex items-center justify-between pt-3 border-t border-slate-100 shrink-0">
-              <div className="text-xs text-slate-500 font-medium">
-                {selectedTxIds.size} von {editingRule.matchingTransactions.length} Buchungen werden der Kategorie zugewiesen.
-              </div>
+            {/* Unified Bottom Action Section */}
+            <div className="pt-3 border-t border-slate-100 shrink-0 space-y-3">
+              {showInlineRejectOptions ? (
+                /* Inline Expanded Rejection Choice Box directly inside the same modal */
+                <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 space-y-3 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-950 flex items-center gap-1.5">
+                      <span>❌</span> Wie möchten Sie die Regel "{editingRule.pattern}" ablehnen / löschen?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowInlineRejectOptions(false)}
+                      className="text-xs font-semibold text-rose-700 hover:underline cursor-pointer"
+                    >
+                      Zurück zu Aktionen
+                    </button>
+                  </div>
 
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const r = editingRule;
-                    setEditingRule(null);
-                    setDeletingRule(r);
-                  }}
-                  className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
-                >
-                  ❌ Ablehnen / Löschen...
-                </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleExecuteReject(false)}
+                      disabled={savingRule}
+                      className="p-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-left transition cursor-pointer shadow-2xs group"
+                    >
+                      <span className="font-bold text-xs text-slate-900 block group-hover:text-blue-600">
+                        📌 Kategorien BEIBEHALTEN
+                      </span>
+                      <span className="text-[11px] text-slate-500 block mt-0.5">
+                        Löscht die Regel, aber lässt die zugeordneten Buchungen unberührt.
+                      </span>
+                    </button>
 
-                <button
-                  onClick={() => setEditingRule(null)}
-                  className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition cursor-pointer"
-                >
-                  Abbrechen
-                </button>
-
-                <button
-                  onClick={handleSaveAndApproveRule}
-                  disabled={savingRule}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
-                >
-                  {savingRule ? 'Speichere...' : `✅ Freigeben & ${selectedTxIds.size} Buchungen umstellen`}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Deletion Choice Modal */}
-      {deletingRule && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-bold text-slate-900">
-                ❌ Regel "{deletingRule.pattern}" ablehnen / löschen
-              </h3>
-              <button onClick={() => setDeletingRule(null)} className="text-slate-400 hover:text-slate-600 font-bold">
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Wie möchten Sie mit den <b>{deletingRule.matchingCount} verknüpften Buchungen</b> verfahren, die dieser Regel zugewiesen sind?
-            </p>
-
-            <div className="space-y-3">
-              <button
-                type="button"
-                onClick={() => executeDeleteRule(false)}
-                disabled={deletingLoading}
-                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-left transition flex items-start gap-3 group cursor-pointer"
-              >
-                <span className="text-lg">📌</span>
-                <div>
-                  <span className="font-bold text-xs text-slate-900 block group-hover:text-blue-600">
-                    Bisherige Kategorien BEIBEHALTEN
-                  </span>
-                  <span className="text-[11px] text-slate-500 block mt-0.5">
-                    Die Regel wird gelöscht, aber bereits zugeordnete Buchungen behalten ihre jetzige Kategorie.
-                  </span>
+                    <button
+                      type="button"
+                      onClick={() => handleExecuteReject(true)}
+                      disabled={savingRule}
+                      className="p-3 bg-white hover:bg-rose-100/70 border border-rose-300 rounded-xl text-left transition cursor-pointer shadow-2xs group"
+                    >
+                      <span className="font-bold text-xs text-rose-900 block">
+                        ↩️ Auf UNKATEGORISIERT zurücksetzen
+                      </span>
+                      <span className="text-[11px] text-rose-700 block mt-0.5">
+                        Löscht die Regel UND setzt alle {editingRule.matchingTransactions.length} Buchungen zurück.
+                      </span>
+                    </button>
+                  </div>
                 </div>
-              </button>
+              ) : (
+                /* Default Action Bar */
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-500 font-medium">
+                    {selectedTxIds.size} von {editingRule.matchingTransactions.length} Buchungen werden der Kategorie zugewiesen.
+                  </div>
 
-              <button
-                type="button"
-                onClick={() => executeDeleteRule(true)}
-                disabled={deletingLoading}
-                className="w-full p-4 bg-rose-50 hover:bg-rose-100/70 border border-rose-200 rounded-xl text-left transition flex items-start gap-3 group cursor-pointer"
-              >
-                <span className="text-lg">↩️</span>
-                <div>
-                  <span className="font-bold text-xs text-rose-900 block">
-                    Alle Buchungen auf UNKATEGORISIERT zurücksetzen
-                  </span>
-                  <span className="text-[11px] text-rose-700 block mt-0.5">
-                    Löscht die Regel UND setzt alle {deletingRule.matchingCount} verknüpften Buchungen wieder auf unkategorisiert zurück.
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowInlineRejectOptions(true)}
+                      className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
+                    >
+                      ❌ Regel ablehnen / löschen...
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEditingRule(null)}
+                      className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                    >
+                      Abbrechen
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSaveAndApproveRule}
+                      disabled={savingRule}
+                      className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {savingRule ? 'Speichere...' : `✅ Freigeben & ${selectedTxIds.size} Buchungen umstellen`}
+                    </button>
+                  </div>
                 </div>
-              </button>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => setDeletingRule(null)}
-                className="px-4 py-2 text-slate-600 text-xs font-semibold hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              >
-                Abbrechen
-              </button>
+              )}
             </div>
           </div>
         </div>

@@ -14,6 +14,32 @@ import {
   Tooltip,
 } from 'recharts';
 
+interface Category {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface TransactionItem {
+  id: string;
+  date: string;
+  payee: string | null;
+  iban: string | null;
+  description: string;
+  amount: number;
+  categoryId: string | null;
+}
+
+interface PieCategoryData {
+  id: string;
+  name: string;
+  amount: number;
+  color: string;
+  count: number;
+  percentage: number;
+  transactions: TransactionItem[];
+}
+
 interface StatsResponse {
   summary: {
     totalExpense: number;
@@ -24,14 +50,7 @@ interface StatsResponse {
     uncategorizedAmount: number;
   };
   availableMonths: Array<{ value: string; label: string }>;
-  pieChartData: Array<{
-    id: string;
-    name: string;
-    amount: number;
-    color: string;
-    count: number;
-    percentage: number;
-  }>;
+  pieChartData: PieCategoryData[];
   barChartData: Array<{
     monthKey: string;
     month: string;
@@ -41,11 +60,28 @@ interface StatsResponse {
 
 export default function Dashboard() {
   const [data, setData] = useState<StatsResponse | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
+  
+  // Accordion state for expanded categories
+  const [expandedCatIds, setExpandedCatIds] = useState<Set<string>>(new Set());
 
-  const fetchStats = async (monthVal = selectedMonth) => {
-    setLoading(true);
+  // Toast / Notification Message
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const fetchCategories = async () => {
+    try {
+      const res = await fetch('/api/categories');
+      const json = await res.json();
+      setCategories(json.categories || []);
+    } catch (e) {
+      console.error('Error fetching categories:', e);
+    }
+  };
+
+  const fetchStats = async (monthVal = selectedMonth, silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(`/api/stats?month=${monthVal}&_t=${Date.now()}`, {
         cache: 'no-store',
@@ -55,18 +91,65 @@ export default function Dashboard() {
     } catch (e) {
       console.error('Error fetching stats:', e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchStats(selectedMonth);
+    fetchCategories();
 
     // Auto-refresh when tab or page regains focus
-    const handleFocus = () => fetchStats(selectedMonth);
+    const handleFocus = () => fetchStats(selectedMonth, true);
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [selectedMonth]);
+
+  const toggleCategoryExpand = (catId: string) => {
+    setExpandedCatIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(catId)) {
+        next.delete(catId);
+      } else {
+        next.add(catId);
+      }
+      return next;
+    });
+  };
+
+  const handleRecategorizeTransaction = async (txId: string, newCategoryId: string) => {
+    if (!data) return;
+
+    // Find current category and transaction name for toast
+    let txName = 'Buchung';
+    for (const cat of data.pieChartData) {
+      const found = cat.transactions.find((t) => t.id === txId);
+      if (found) {
+        txName = found.payee || found.description.substring(0, 20);
+        break;
+      }
+    }
+
+    setToastMsg(`✅ ${txName} neu zugeordnet!`);
+
+    try {
+      const res = await fetch('/api/transactions/categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactionId: txId,
+          categoryId: newCategoryId,
+        }),
+      });
+
+      if (res.ok) {
+        // Silently update dashboard stats to re-calculate amounts
+        fetchStats(selectedMonth, true);
+      }
+    } catch (e) {
+      console.error('Error recategorizing transaction:', e);
+    }
+  };
 
   const formatEuro = (num: number) => {
     return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
@@ -93,6 +176,15 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {toastMsg && (
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs animate-in fade-in duration-150">
+          <span>{toastMsg}</span>
+          <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Prominent Month Selector Tabs */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2 text-slate-700 font-semibold text-sm">
@@ -102,7 +194,7 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setSelectedMonth('all')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
               selectedMonth === 'all'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -115,7 +207,7 @@ export default function Dashboard() {
             <button
               key={m.value}
               onClick={() => setSelectedMonth(m.value)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
                 selectedMonth === m.value
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -280,44 +372,126 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Detailed Category Table */}
+          {/* Interactive Expandable Category Table with Direct Recategorization */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-bold text-slate-900">Kategorie-Aufschlüsselung im Detail</h3>
-                <p className="text-xs text-slate-500">Alle Kategorien für den gewählten Zeitraum</p>
+                <p className="text-xs text-slate-500">
+                  Klicken Sie auf eine Kategorie, um alle zugehörigen Buchungen aufzuklappen und direkt anzupassen.
+                </p>
               </div>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {data.pieChartData.map((cat) => (
-                <div key={cat.name} className="p-4 sm:px-6 flex items-center justify-between hover:bg-slate-50/80 transition">
-                  <div className="flex items-center gap-4 w-1/3">
-                    <span className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
-                    <div>
-                      <span className="font-semibold text-slate-900 text-sm block">{cat.name}</span>
-                      <span className="text-xs text-slate-400">{cat.count} Buchungen</span>
-                    </div>
-                  </div>
+              {data.pieChartData.map((cat) => {
+                const isExpanded = expandedCatIds.has(cat.id);
+                return (
+                  <div key={cat.id || cat.name} className="transition">
+                    {/* Category Row Header (Clickable Accordion) */}
+                    <button
+                      type="button"
+                      onClick={() => toggleCategoryExpand(cat.id)}
+                      className="w-full p-4 sm:px-6 flex items-center justify-between hover:bg-slate-50 text-left transition cursor-pointer"
+                    >
+                      <div className="flex items-center gap-4 w-5/12">
+                        <span className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
+                        <div>
+                          <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                            {cat.name}
+                            <span className="text-xs font-normal text-slate-400">
+                              {isExpanded ? '▲' : '▼'}
+                            </span>
+                          </span>
+                          <span className="text-xs text-slate-400">{cat.count} Buchungen</span>
+                        </div>
+                      </div>
 
-                  <div className="w-1/3 hidden sm:block">
-                    <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-                      <span>Anteil</span>
-                      <span className="font-bold text-slate-700">{cat.percentage}%</span>
-                    </div>
-                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{ width: `${cat.percentage}%`, backgroundColor: cat.color }}
-                      />
-                    </div>
-                  </div>
+                      <div className="w-4/12 hidden sm:block">
+                        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                          <span>Anteil</span>
+                          <span className="font-bold text-slate-700">{cat.percentage}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{ width: `${cat.percentage}%`, backgroundColor: cat.color }}
+                          />
+                        </div>
+                      </div>
 
-                  <div className="text-right">
-                    <span className="font-bold text-slate-900 text-sm block">{formatEuro(cat.amount)}</span>
+                      <div className="text-right flex items-center justify-end gap-4">
+                        <span className="font-bold text-slate-900 text-sm block">{formatEuro(cat.amount)}</span>
+                        <span className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition">
+                          {isExpanded ? 'Zuklappen ▲' : 'Aufklappen ▼'}
+                        </span>
+                      </div>
+                    </button>
+
+                    {/* Expanded Transactions List */}
+                    {isExpanded && (
+                      <div className="bg-slate-50/70 p-4 sm:px-8 border-t border-b border-slate-200/80 space-y-3 animate-in fade-in duration-150">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-700 mb-2">
+                          <span>📑 Einzelbuchungen der Kategorie "{cat.name}" ({cat.transactions.length}):</span>
+                          <span className="text-slate-400 font-normal">Direkte Kategorie-Anpassung möglich</span>
+                        </div>
+
+                        {cat.transactions.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-slate-400">
+                            Keine Buchungen in dieser Kategorie.
+                          </div>
+                        ) : (
+                          <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
+                            {cat.transactions.map((tx) => (
+                              <div
+                                key={tx.id}
+                                className="p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-slate-50 transition"
+                              >
+                                <div className="space-y-0.5 max-w-lg">
+                                  <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                                    <span>{tx.payee || 'Unbekannter Empfänger'}</span>
+                                    {tx.iban && (
+                                      <span className="font-mono text-[11px] text-slate-400 font-normal">
+                                        ({tx.iban})
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-slate-600 text-xs leading-relaxed truncate">
+                                    {tx.description}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 font-mono">
+                                    Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
+                                  <span className="font-extrabold text-sm text-slate-900">
+                                    {formatEuro(tx.amount)}
+                                  </span>
+
+                                  {/* Direct Category Dropdown */}
+                                  <select
+                                    value={tx.categoryId || 'uncategorized'}
+                                    onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
+                                    className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                                  >
+                                    <option value="uncategorized">❓ Unkategorisiert</option>
+                                    {categories.map((c) => (
+                                      <option key={c.id} value={c.id}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
