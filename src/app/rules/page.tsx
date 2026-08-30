@@ -60,8 +60,8 @@ export default function RulesPage() {
   // Toast / Notification Message
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  const fetchRules = async () => {
-    setLoading(true);
+  const fetchRules = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/rules');
       const data = await res.json();
@@ -69,7 +69,7 @@ export default function RulesPage() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -107,7 +107,7 @@ export default function RulesPage() {
       if (data.success) {
         setPattern('');
         setToastMsg(`✅ Regel "${pattern}" manuell angelegt, freigegeben & auf ${data.appliedCount} Umsätze angewendet!`);
-        fetchRules();
+        fetchRules(true);
       }
     } catch (e) {
       console.error(e);
@@ -116,10 +116,17 @@ export default function RulesPage() {
     }
   };
 
+  // 0ms Optimistic Direct Approval
   const handleApproveRuleDirect = async (rule: Rule) => {
+    // 0ms Optimistic UI update
+    setRules((prev) =>
+      prev.map((r) => (r.id === rule.id ? { ...r, isApproved: true } : r))
+    );
+    setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & Buchungen zugeordnet!`);
+
     try {
       const txIds = rule.matchingTransactions.map((t) => t.id);
-      const res = await fetch('/api/rules', {
+      await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -128,12 +135,7 @@ export default function RulesPage() {
           updateTransactionIds: txIds,
         }),
       });
-
-      const data = await res.json();
-      if (data.success) {
-        setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & ${data.updatedTxCount} Buchungen zugeordnet!`);
-        fetchRules();
-      }
+      fetchRules(true);
     } catch (e) {
       console.error(e);
     }
@@ -172,18 +174,39 @@ export default function RulesPage() {
     }
   };
 
+  // 0ms Optimistic Save & Approve from Modal
   const handleSaveAndApproveRule = async () => {
     if (!editingRule || !targetCategoryId) return;
 
-    setSavingRule(true);
+    const ruleId = editingRule.id;
+    const targetCat = categories.find((c) => c.id === targetCategoryId) || editingRule.category;
+
+    // 0ms Optimistic UI Update
+    setRules((prev) =>
+      prev.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              pattern: editPattern,
+              matchType: editMatchType,
+              category: targetCat,
+              isApproved: true,
+            }
+          : r
+      )
+    );
+
+    setEditingRule(null);
+    setShowInlineRejectOptions(false);
+    setToastMsg(`✅ Regel "${editPattern}" freigegeben & Buchungen neu kategorisiert!`);
+
     try {
       const updateTransactionIds = Array.from(selectedTxIds);
-
-      const res = await fetch('/api/rules', {
+      await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: editingRule.id,
+          id: ruleId,
           categoryId: targetCategoryId,
           matchType: editMatchType,
           pattern: editPattern,
@@ -191,45 +214,53 @@ export default function RulesPage() {
           updateTransactionIds,
         }),
       });
-
-      const data = await res.json();
-      if (data.success) {
-        setToastMsg(
-          `✅ Regel "${editPattern}" freigegeben & ${data.updatedTxCount} Buchungen neu kategorisiert!`
-        );
-        setEditingRule(null);
-        setShowInlineRejectOptions(false);
-        fetchRules();
-      }
+      fetchRules(true);
     } catch (e) {
       console.error(e);
-    } finally {
-      setSavingRule(false);
     }
   };
 
+  // 0ms Optimistic Rule Rejection / Deletion
   const handleExecuteReject = async (resetTransactions: boolean) => {
     if (!editingRule) return;
 
-    setSavingRule(true);
+    const ruleId = editingRule.id;
+    const rulePattern = editingRule.pattern;
+
+    // 0ms Optimistic Instant Removal from State
+    setRules((prev) => prev.filter((r) => r.id !== ruleId));
+    setEditingRule(null);
+    setShowInlineRejectOptions(false);
+
+    setToastMsg(
+      resetTransactions
+        ? `❌ Regel "${rulePattern}" gelöscht & Buchungen auf UNKATEGORISIERT zurückgesetzt.`
+        : `❌ Regel "${rulePattern}" gelöscht (bisherige Kategorien beibehalten).`
+    );
+
     try {
-      await fetch(`/api/rules?id=${editingRule.id}&reset=${resetTransactions}`, {
+      await fetch(`/api/rules?id=${ruleId}&reset=${resetTransactions}`, {
         method: 'DELETE',
       });
-
-      setToastMsg(
-        resetTransactions
-          ? `❌ Regel "${editingRule.pattern}" abgelehnt/gelöscht & Buchungen auf UNKATEGORISIERT zurückgesetzt.`
-          : `❌ Regel "${editingRule.pattern}" abgelehnt/gelöscht (bisherige Kategorien beibehalten).`
-      );
-
-      setEditingRule(null);
-      setShowInlineRejectOptions(false);
-      fetchRules();
+      fetchRules(true);
     } catch (e) {
       console.error(e);
-    } finally {
-      setSavingRule(false);
+    }
+  };
+
+  // 0ms Direct Table Delete Button
+  const handleDirectDelete = async (rule: Rule) => {
+    // 0ms Optimistic Removal
+    setRules((prev) => prev.filter((r) => r.id !== rule.id));
+    setToastMsg(`❌ Regel "${rule.pattern}" gelöscht.`);
+
+    try {
+      await fetch(`/api/rules?id=${rule.id}&reset=false`, {
+        method: 'DELETE',
+      });
+      fetchRules(true);
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -269,7 +300,7 @@ export default function RulesPage() {
       </div>
 
       {toastMsg && (
-        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs">
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between shadow-xs animate-in fade-in duration-150">
           <span>{toastMsg}</span>
           <button onClick={() => setToastMsg(null)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
             ✕
@@ -296,7 +327,7 @@ export default function RulesPage() {
             {pendingRules.slice(0, 10).map((rule) => (
               <div
                 key={rule.id}
-                className="bg-white p-4 rounded-xl border border-amber-200 flex items-center justify-between shadow-2xs"
+                className="bg-white p-4 rounded-xl border border-amber-200 flex items-center justify-between shadow-2xs transition-all duration-150"
               >
                 <div>
                   <span className="font-bold text-slate-900 block text-sm">{rule.pattern}</span>
@@ -579,7 +610,7 @@ export default function RulesPage() {
                       )}
 
                       <button
-                        onClick={() => openApprovalDetailModal(rule, undefined, true)}
+                        onClick={() => handleDirectDelete(rule)}
                         className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 hover:bg-red-50 rounded-lg transition cursor-pointer"
                       >
                         Löschen
@@ -740,7 +771,7 @@ export default function RulesPage() {
                     <button
                       type="button"
                       onClick={() => setShowInlineRejectOptions(false)}
-                      className="text-xs font-semibold text-rose-700 hover:underline"
+                      className="text-xs font-semibold text-rose-700 hover:underline cursor-pointer"
                     >
                       Zurück zu Aktionen
                     </button>
