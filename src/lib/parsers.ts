@@ -1,5 +1,7 @@
+// @ts-ignore
 import Papa from 'papaparse';
 import { XMLParser } from 'fast-xml-parser';
+// @ts-ignore
 import crypto from 'crypto';
 
 export interface RawParsedTransaction {
