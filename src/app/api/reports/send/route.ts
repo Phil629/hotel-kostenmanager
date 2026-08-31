@@ -20,8 +20,8 @@ export async function POST(req: NextRequest) {
       const year = parseInt(yearStr, 10);
       const m = parseInt(monthStr, 10) - 1;
       const startDate = new Date(Date.UTC(year, m, 1));
-      const endDate = new Date(Date.UTC(year, m + 1, 0, 23, 59, 59));
-      whereClause.date = { gte: startDate, lte: endDate };
+      const endDate = new Date(Date.UTC(year, m + 1, 1));
+      whereClause.date = { gte: startDate, lt: endDate };
     }
 
     const transactions = await prisma.transaction.findMany({
@@ -29,25 +29,25 @@ export async function POST(req: NextRequest) {
       include: { category: true },
     });
 
-    const totalExpense = transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
+    const totalExpense = transactions.reduce((acc, t) => acc + Math.round(Math.abs(t.amount) * 100), 0) / 100;
 
     const categoryMap: Record<string, number> = {};
     for (const t of transactions) {
       const catName = t.category?.name || 'Unkategorisiert';
-      categoryMap[catName] = (categoryMap[catName] || 0) + Math.abs(t.amount);
+      categoryMap[catName] = (categoryMap[catName] || 0) + Math.round(Math.abs(t.amount) * 100);
     }
 
     const categoryBreakdown = Object.entries(categoryMap)
-      .map(([name, amount]) => ({
+      .map(([name, amountCents]) => ({
         name,
-        amount: Math.round(amount * 100) / 100,
-        percentage: totalExpense > 0 ? Math.round((amount / totalExpense) * 1000) / 10 : 0,
+        amount: amountCents / 100,
+        percentage: totalExpense > 0 ? Math.round(((amountCents / 100) / totalExpense) * 1000) / 10 : 0,
       }))
       .sort((a, b) => b.amount - a.amount);
 
-    const fnbTotal = categoryBreakdown.filter((c) => c.name.includes('F&B')).reduce((acc, c) => acc + c.amount, 0);
-    const energyTotal = categoryBreakdown.filter((c) => c.name.includes('Energie')).reduce((acc, c) => acc + c.amount, 0);
-    const otaTotal = categoryBreakdown.filter((c) => c.name.includes('OTA')).reduce((acc, c) => acc + c.amount, 0);
+    const fnbTotal = categoryBreakdown.filter((c) => c.name.includes('F&B')).reduce((acc, c) => acc + Math.round(c.amount * 100), 0) / 100;
+    const energyTotal = categoryBreakdown.filter((c) => c.name.includes('Energie')).reduce((acc, c) => acc + Math.round(c.amount * 100), 0) / 100;
+    const otaTotal = categoryBreakdown.filter((c) => c.name.includes('OTA')).reduce((acc, c) => acc + Math.round(c.amount * 100), 0) / 100;
 
     const formattedMsg = formatMonthlyReportMessage(
       settings.hotelName || 'Parkhotel Bergblick',

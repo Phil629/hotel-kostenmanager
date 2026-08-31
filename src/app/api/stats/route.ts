@@ -59,14 +59,15 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const totalExpense = filteredTransactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
+    const totalExpenseCents = filteredTransactions.reduce((acc, t) => acc + Math.round(Math.abs(t.amount) * 100), 0);
+    const totalExpense = totalExpenseCents / 100;
 
     const categoryMap: Record<
       string,
       {
         id: string;
         name: string;
-        amount: number;
+        amountCents: number;
         color: string;
         count: number;
         transactions: Array<{
@@ -90,14 +91,14 @@ export async function GET(req: NextRequest) {
         categoryMap[catName] = {
           id: catId,
           name: catName,
-          amount: 0,
+          amountCents: 0,
           color: catColor,
           count: 0,
           transactions: [],
         };
       }
 
-      categoryMap[catName].amount += Math.abs(t.amount);
+      categoryMap[catName].amountCents += Math.round(Math.abs(t.amount) * 100);
       categoryMap[catName].count += 1;
       categoryMap[catName].transactions.push({
         id: t.id,
@@ -113,17 +114,17 @@ export async function GET(req: NextRequest) {
     const pieChartData = Object.values(categoryMap)
       .map((item) => ({
         ...item,
-        amount: Math.round(item.amount * 100) / 100,
-        percentage: totalExpense > 0 ? Math.round((item.amount / totalExpense) * 1000) / 10 : 0,
+        amount: item.amountCents / 100,
+        percentage: totalExpenseCents > 0 ? Math.round((item.amountCents / totalExpenseCents) * 1000) / 10 : 0,
       }))
       .sort((a, b) => b.amount - a.amount);
 
     // Build Bar Chart data across ALL months always
-    const monthlyTotalsMap: Record<string, number> = {};
+    const monthlyTotalsCentsMap: Record<string, number> = {};
     for (const t of allTransactions) {
       const dateObj = new Date(t.date);
       const ym = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
-      monthlyTotalsMap[ym] = (monthlyTotalsMap[ym] || 0) + Math.abs(t.amount);
+      monthlyTotalsCentsMap[ym] = (monthlyTotalsCentsMap[ym] || 0) + Math.round(Math.abs(t.amount) * 100);
     }
 
     const barChartData = Array.from(monthsSet)
@@ -133,35 +134,35 @@ export async function GET(req: NextRequest) {
         return {
           monthKey: mStr,
           month: `${monthNamesGerman[m] || m} ${y}`,
-          total: Math.round((monthlyTotalsMap[mStr] || 0) * 100) / 100,
+          total: (monthlyTotalsCentsMap[mStr] || 0) / 100,
         };
       });
 
     const fnbTotal = pieChartData
       .filter((p) => p.name.includes('F&B'))
-      .reduce((acc, p) => acc + p.amount, 0);
+      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
     const energyTotal = pieChartData
       .filter((p) => p.name.includes('Energie'))
-      .reduce((acc, p) => acc + p.amount, 0);
+      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
     const otaTotal = pieChartData
       .filter((p) => p.name.includes('OTA'))
-      .reduce((acc, p) => acc + p.amount, 0);
+      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
     const uncategorizedAmount = pieChartData
       .filter((p) => p.name === 'Unkategorisiert')
-      .reduce((acc, p) => acc + p.amount, 0);
+      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
     return NextResponse.json(
       {
         summary: {
-          totalExpense: Math.round(totalExpense * 100) / 100,
+          totalExpense,
           transactionCount: filteredTransactions.length,
-          fnbTotal: Math.round(fnbTotal * 100) / 100,
-          energyTotal: Math.round(energyTotal * 100) / 100,
-          otaTotal: Math.round(otaTotal * 100) / 100,
-          uncategorizedAmount: Math.round(uncategorizedAmount * 100) / 100,
+          fnbTotal,
+          energyTotal,
+          otaTotal,
+          uncategorizedAmount,
         },
         availableMonths,
         pieChartData,

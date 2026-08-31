@@ -88,8 +88,8 @@ export async function GET(req: NextRequest) {
       const year = parseInt(yearStr, 10);
       const m = parseInt(monthStr, 10) - 1;
       const startDate = new Date(Date.UTC(year, m, 1));
-      const endDate = new Date(Date.UTC(year, m + 1, 0, 23, 59, 59));
-      whereClause.date = { gte: startDate, lte: endDate };
+      const endDate = new Date(Date.UTC(year, m + 1, 1));
+      whereClause.date = { gte: startDate, lt: endDate };
     }
 
     const transactions = await prisma.transaction.findMany({
@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
 
     const totalCount = transactions.length;
     const uncategorizedCount = transactions.filter((t) => t.status === 'UNCATEGORIZED').length;
-    const totalExpenses = transactions.reduce((acc, t) => acc + Math.abs(t.amount), 0);
+    const totalExpenses = transactions.reduce((acc, t) => acc + Math.round(Math.abs(t.amount) * 100), 0) / 100;
 
     return NextResponse.json(
       {
