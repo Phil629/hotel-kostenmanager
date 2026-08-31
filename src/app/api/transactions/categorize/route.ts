@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       data: {
         categoryId: isReset ? null : categoryId,
         status: isReset ? 'UNCATEGORIZED' : 'CATEGORIZED',
-        matchedRuleId: isReset || deleteRuleId ? null : undefined,
+        matchedRuleId: null, // Clear matched rule on manual override to prevent accidental resets later
       },
       include: {
         category: true,

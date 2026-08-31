@@ -89,6 +89,16 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Kategorie-ID erforderlich' }, { status: 400 });
     }
 
+    // Reset transactions before deleting category to ensure status is updated correctly
+    await prisma.transaction.updateMany({
+      where: { categoryId: id },
+      data: {
+        categoryId: null,
+        status: 'UNCATEGORIZED',
+        matchedRuleId: null,
+      },
+    });
+
     await prisma.category.delete({
       where: { id },
     });
