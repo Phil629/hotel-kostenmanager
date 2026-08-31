@@ -9,10 +9,11 @@ export interface MatchResult {
 export async function matchTransaction(
   iban: string | null,
   payee: string | null,
-  description: string
+  description: string,
+  preloadedRules?: any[]
 ): Promise<MatchResult> {
-  // Only query APPROVED rules to automatically categorize transactions
-  const rules = await prisma.rule.findMany({
+  // Only query APPROVED rules if not preloaded
+  const rules = preloadedRules || await prisma.rule.findMany({
     where: { isApproved: true },
     include: { category: true },
   });
@@ -144,8 +145,13 @@ export async function learnRuleFromAssignment(
       where: { status: 'UNCATEGORIZED' },
     });
 
+    const preloadedRules = await prisma.rule.findMany({
+      where: { isApproved: true },
+      include: { category: true },
+    });
+
     for (const tx of uncategorized) {
-      const match = await matchTransaction(tx.iban, tx.payee, tx.description);
+      const match = await matchTransaction(tx.iban, tx.payee, tx.description, preloadedRules);
       if (match.status === 'CATEGORIZED' && match.categoryId) {
         await prisma.transaction.update({
           where: { id: tx.id },

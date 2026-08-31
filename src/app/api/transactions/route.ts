@@ -156,6 +156,11 @@ export async function POST(req: NextRequest) {
     let skippedCount = 0;
     let autoCategorizedCount = 0;
 
+    const preloadedRules = await prisma.rule.findMany({
+      where: { isApproved: true },
+      include: { category: true },
+    });
+
     for (const raw of rawTransactions) {
       const existing = await prisma.transaction.findUnique({
         where: { rawHash: raw.rawHash },
@@ -166,7 +171,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const match = await matchTransaction(raw.iban, raw.payee, raw.description);
+      const match = await matchTransaction(raw.iban, raw.payee, raw.description, preloadedRules);
 
       if (match.status === 'CATEGORIZED') {
         autoCategorizedCount++;
