@@ -171,12 +171,19 @@ export async function POST(req: NextRequest) {
       include: { category: true },
     });
 
-    for (const raw of rawTransactions) {
-      const existing = await prisma.transaction.findUnique({
-        where: { rawHash: raw.rawHash },
-      });
+    // 1. Bulk fetch existing hashes to prevent N+1 query
+    const rawHashes = rawTransactions.map((t) => t.rawHash);
+    const existingTxs = await prisma.transaction.findMany({
+      where: { rawHash: { in: rawHashes } },
+      select: { rawHash: true },
+    });
+    const existingHashMap = new Set(existingTxs.map((t) => t.rawHash));
 
-      if (existing) {
+    // 2. Prepare new transactions in memory
+    const newTransactionsData = [];
+    
+    for (const raw of rawTransactions) {
+      if (existingHashMap.has(raw.rawHash)) {
         skippedCount++;
         continue;
       }
@@ -187,21 +194,26 @@ export async function POST(req: NextRequest) {
         autoCategorizedCount++;
       }
 
-      await prisma.transaction.create({
-        data: {
-          date: raw.date,
-          amount: raw.amount,
-          payee: raw.payee,
-          iban: raw.iban,
-          description: raw.description,
-          status: match.status,
-          categoryId: match.categoryId,
-          matchedRuleId: match.ruleId,
-          rawHash: raw.rawHash,
-        },
+      newTransactionsData.push({
+        date: raw.date,
+        amount: raw.amount,
+        payee: raw.payee,
+        iban: raw.iban,
+        description: raw.description,
+        status: match.status,
+        categoryId: match.categoryId,
+        matchedRuleId: match.ruleId,
+        rawHash: raw.rawHash,
       });
+    }
 
-      importedCount++;
+    // 3. Bulk insert new transactions
+    if (newTransactionsData.length > 0) {
+      await prisma.transaction.createMany({
+        data: newTransactionsData,
+        skipDuplicates: true,
+      });
+      importedCount = newTransactionsData.length;
     }
 
     return NextResponse.json({
