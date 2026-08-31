@@ -131,16 +131,16 @@ export async function GET(req: NextRequest) {
       monthlyTotalsCentsMap[ym] = (monthlyTotalsCentsMap[ym] || 0) + Math.round(Math.abs(t.amount) * 100);
     }
 
-    const barChartData = Array.from(monthsSet)
-      .sort()
-      .map((mStr) => {
-        const [y, m] = mStr.split('-');
-        return {
-          monthKey: mStr,
-          month: `${monthNamesGerman[m] || m} ${y}`,
-          total: (monthlyTotalsCentsMap[mStr] || 0) / 100,
-        };
-      });
+    const shortMonthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+    const barChartData = shortMonthNames.map((name, index) => {
+      const mStr = String(index + 1).padStart(2, '0');
+      const dataPoint: any = { month: name };
+      for (const year of sortedYears) {
+        const ym = `${year}-${mStr}`;
+        dataPoint[year] = (monthlyTotalsCentsMap[ym] || 0) / 100;
+      }
+      return dataPoint;
+    });
 
     const fnbTotal = pieChartData
       .filter((p) => p.name.includes('F&B'))
@@ -158,6 +158,7 @@ export async function GET(req: NextRequest) {
       .filter((p) => p.name === 'Unkategorisiert')
       .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
+    // We also need to send back the sortedYears so the frontend knows which bars to render
     return NextResponse.json(
       {
         summary: {
@@ -169,6 +170,7 @@ export async function GET(req: NextRequest) {
           uncategorizedAmount,
         },
         availableMonths,
+        availableYears: sortedYears,
         pieChartData,
         barChartData,
       },

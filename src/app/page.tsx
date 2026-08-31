@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
 } from 'recharts';
 
 interface Category {
@@ -52,10 +53,10 @@ interface StatsResponse {
   availableMonths: Array<{ value: string; label: string }>;
   pieChartData: PieCategoryData[];
   barChartData: Array<{
-    monthKey: string;
     month: string;
-    total: number;
+    [key: string]: string | number;
   }>;
+  availableYears: string[];
 }
 
 export default function Dashboard() {
@@ -328,10 +329,22 @@ export default function Dashboard() {
                       <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(v / 1000)}k€`} />
                       <Tooltip
-                        formatter={(val: any) => formatEuro(Number(val))}
+                        formatter={(val: any, name: any) => [formatEuro(Number(val)), `Jahr ${name}`]}
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)' }}
                       />
-                      <Bar dataKey="total" fill="#2563eb" radius={[6, 6, 0, 0]} name="Gesamtkosten" />
+                      <Legend />
+                      {data.availableYears?.map((year, i) => {
+                        const colors = ['#2563eb', '#64748b', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6'];
+                        return (
+                          <Bar 
+                            key={year} 
+                            dataKey={year} 
+                            fill={colors[i % colors.length]} 
+                            radius={[4, 4, 0, 0]} 
+                            name={year} 
+                          />
+                        );
+                      })}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
