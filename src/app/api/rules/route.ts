@@ -27,7 +27,7 @@ export async function GET() {
         }
         if (rule.matchType === 'PAYEE' && t.payee) {
           const payeeLower = t.payee.toLowerCase().trim();
-          return payeeLower.includes(patternLower) || patternLower.includes(payeeLower);
+          return payeeLower.includes(patternLower);
         }
         if (rule.matchType === 'KEYWORD') {
           const payeeLower = (t.payee || '').toLowerCase();
@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
           isMatch = t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
         } else if (matchType === 'PAYEE' && t.payee) {
           const payeeLower = t.payee.toLowerCase().trim();
-          isMatch = payeeLower.includes(patternLower) || patternLower.includes(payeeLower);
+          isMatch = payeeLower.includes(patternLower);
         } else if (matchType === 'KEYWORD') {
           const payeeLower = (t.payee || '').toLowerCase();
           const descLower = (t.description || '').toLowerCase();

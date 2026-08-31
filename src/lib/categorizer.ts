@@ -38,7 +38,7 @@ export async function matchTransaction(
     for (const rule of rules) {
       if (rule.matchType === 'PAYEE') {
         const pattern = rule.pattern.toLowerCase().trim();
-        if (pattern && (cleanPayee.includes(pattern) || pattern.includes(cleanPayee))) {
+        if (pattern && cleanPayee.includes(pattern)) {
           return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
         }
       }
