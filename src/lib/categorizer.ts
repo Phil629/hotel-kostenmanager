@@ -22,12 +22,17 @@ export async function matchTransaction(
   const cleanPayee = (payee || '').toLowerCase().trim();
   const cleanDesc = (description || '').toLowerCase().trim();
 
+  // Sort rules in memory by pattern length descending!
+  // This guarantees that more specific rules (e.g. "Telekom Deutschland")
+  // are evaluated BEFORE generic rules (e.g. "Telekom").
+  const sortedRules = [...rules].sort((a, b) => b.pattern.length - a.pattern.length);
+
   // Priority 1: Match by IBAN
-  if (cleanIban && cleanIban.length > 5) {
-    for (const rule of rules) {
+  if (cleanIban) {
+    for (const rule of sortedRules) {
       if (rule.matchType === 'IBAN') {
-        const ruleIban = rule.pattern.replace(/\s+/g, '').toUpperCase();
-        if (cleanIban === ruleIban) {
+        const cleanRuleIban = rule.pattern.replace(/\s+/g, '').toUpperCase();
+        if (cleanIban === cleanRuleIban) {
           return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
         }
       }
@@ -36,10 +41,10 @@ export async function matchTransaction(
 
   // Priority 2: Match by PAYEE exact or substring
   if (cleanPayee) {
-    for (const rule of rules) {
+    for (const rule of sortedRules) {
       if (rule.matchType === 'PAYEE') {
-        const pattern = rule.pattern.toLowerCase().trim();
-        if (pattern && cleanPayee.includes(pattern)) {
+        const patternLower = rule.pattern.toLowerCase().trim();
+        if (cleanPayee.includes(patternLower)) {
           return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
         }
       }
@@ -47,7 +52,7 @@ export async function matchTransaction(
   }
 
   // Priority 3: Match by KEYWORD in Payee or Description
-  for (const rule of rules) {
+  for (const rule of sortedRules) {
     if (rule.matchType === 'KEYWORD') {
       const pattern = rule.pattern.toLowerCase().trim();
       if (pattern && (cleanDesc.includes(pattern) || cleanPayee.includes(pattern))) {
