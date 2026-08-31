@@ -32,30 +32,34 @@ export async function GET(req: NextRequest) {
     };
 
     const monthsSet = new Set<string>();
+    const yearsSet = new Set<string>();
     for (const t of allTransactions) {
       const dateObj = new Date(t.date);
-      const ym = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
+      const y = String(dateObj.getUTCFullYear());
+      const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
       monthsSet.add(ym);
+      yearsSet.add(y);
     }
 
-    const availableMonths = Array.from(monthsSet)
-      .sort()
-      .reverse()
-      .map((ym) => {
-        const [y, m] = ym.split('-');
-        return {
-          value: ym,
-          label: `${monthNamesGerman[m] || m} ${y}`,
-        };
-      });
+    const availableMonths: any[] = [];
+    const sortedYears = Array.from(yearsSet).sort().reverse();
+    for (const y of sortedYears) {
+      availableMonths.push({ value: y, label: `📅 Gesamtes Jahr ${y}` });
+      const monthsInYear = Array.from(monthsSet).filter(ym => ym.startsWith(y)).sort().reverse();
+      for (const ym of monthsInYear) {
+        const m = ym.split('-')[1];
+        availableMonths.push({ value: ym, label: `   ↳ ${monthNamesGerman[m] || m} ${y}` });
+      }
+    }
 
-    // Apply month filter to statistics & pie chart
+    // Apply month/year filter to statistics & pie chart
     let filteredTransactions = allTransactions;
     if (month && month !== 'all') {
       filteredTransactions = allTransactions.filter((t) => {
         const dateObj = new Date(t.date);
-        const ym = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
-        return ym === month;
+        const y = String(dateObj.getUTCFullYear());
+        const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
+        return month.length === 4 ? y === month : ym === month;
       });
     }
 

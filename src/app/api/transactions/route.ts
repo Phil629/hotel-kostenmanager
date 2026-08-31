@@ -37,22 +37,25 @@ export async function GET(req: NextRequest) {
     });
 
     const monthsSet = new Set<string>();
+    const yearsSet = new Set<string>();
     for (const t of allExpenses) {
       const dateObj = new Date(t.date);
-      const ym = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
+      const y = String(dateObj.getUTCFullYear());
+      const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
       monthsSet.add(ym);
+      yearsSet.add(y);
     }
 
-    const availableMonths = Array.from(monthsSet)
-      .sort()
-      .reverse()
-      .map((ym) => {
-        const [y, m] = ym.split('-');
-        return {
-          value: ym,
-          label: `${monthNamesGerman[m] || m} ${y}`,
-        };
-      });
+    const availableMonths: any[] = [];
+    const sortedYears = Array.from(yearsSet).sort().reverse();
+    for (const y of sortedYears) {
+      availableMonths.push({ value: y, label: `📅 Gesamtes Jahr ${y}` });
+      const monthsInYear = Array.from(monthsSet).filter(ym => ym.startsWith(y)).sort().reverse();
+      for (const ym of monthsInYear) {
+        const m = ym.split('-')[1];
+        availableMonths.push({ value: ym, label: `   ↳ ${monthNamesGerman[m] || m} ${y}` });
+      }
+    }
 
     // Build filter clause
     const whereClause: any = {
@@ -84,12 +87,19 @@ export async function GET(req: NextRequest) {
     }
 
     if (month && month !== 'all') {
-      const [yearStr, monthStr] = month.split('-');
-      const year = parseInt(yearStr, 10);
-      const m = parseInt(monthStr, 10) - 1;
-      const startDate = new Date(Date.UTC(year, m, 1));
-      const endDate = new Date(Date.UTC(year, m + 1, 1));
-      whereClause.date = { gte: startDate, lt: endDate };
+      if (month.length === 4) {
+        const year = parseInt(month, 10);
+        const startDate = new Date(Date.UTC(year, 0, 1));
+        const endDate = new Date(Date.UTC(year + 1, 0, 1));
+        whereClause.date = { gte: startDate, lt: endDate };
+      } else {
+        const [yearStr, monthStr] = month.split('-');
+        const year = parseInt(yearStr, 10);
+        const m = parseInt(monthStr, 10) - 1;
+        const startDate = new Date(Date.UTC(year, m, 1));
+        const endDate = new Date(Date.UTC(year, m + 1, 1));
+        whereClause.date = { gte: startDate, lt: endDate };
+      }
     }
 
     const transactions = await prisma.transaction.findMany({

@@ -15,13 +15,20 @@ export async function POST(req: NextRequest) {
     }
 
     let whereClause: any = { amount: { lt: 0 } };
-    if (month) {
-      const [yearStr, monthStr] = month.split('-');
-      const year = parseInt(yearStr, 10);
-      const m = parseInt(monthStr, 10) - 1;
-      const startDate = new Date(Date.UTC(year, m, 1));
-      const endDate = new Date(Date.UTC(year, m + 1, 1));
-      whereClause.date = { gte: startDate, lt: endDate };
+    if (month && month !== 'all') {
+      if (month.length === 4) {
+        const year = parseInt(month, 10);
+        const startDate = new Date(Date.UTC(year, 0, 1));
+        const endDate = new Date(Date.UTC(year + 1, 0, 1));
+        whereClause.date = { gte: startDate, lt: endDate };
+      } else {
+        const [yearStr, monthStr] = month.split('-');
+        const year = parseInt(yearStr, 10);
+        const m = parseInt(monthStr, 10) - 1;
+        const startDate = new Date(Date.UTC(year, m, 1));
+        const endDate = new Date(Date.UTC(year, m + 1, 1));
+        whereClause.date = { gte: startDate, lt: endDate };
+      }
     }
 
     const transactions = await prisma.transaction.findMany({
