@@ -28,6 +28,14 @@ export async function sendTelegramMessage({ botToken, chatId, messageText }: Sen
   return data;
 }
 
+export function escapeHtml(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export function formatMonthlyReportMessage(
   hotelName: string,
   monthYear: string,
@@ -37,11 +45,11 @@ export function formatMonthlyReportMessage(
 ): string {
   const categoriesList = categoryBreakdown
     .slice(0, 7)
-    .map((c) => `• <b>${c.name}</b>: ${c.amount.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} (${c.percentage}%)`)
+    .map((c) => `• <b>${escapeHtml(c.name)}</b>: ${c.amount.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })} (${c.percentage}%)`)
     .join('\n');
 
-  return `<b>🏨 Monatsbericht: ${hotelName}</b>
-📅 <b>Zeitraum:</b> ${monthYear}
+  return `<b>🏨 Monatsbericht: ${escapeHtml(hotelName)}</b>
+📅 <b>Zeitraum:</b> ${escapeHtml(monthYear)}
 
 💸 <b>Gesamtausgaben:</b> ${totalExpense.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
 
@@ -49,8 +57,8 @@ export function formatMonthlyReportMessage(
 ${categoriesList}
 
 <b>⚡ Hotel Key Performance Metrics:</b>
-• 🥖 <b>F&B (Gastronomie):</b> ${kpis.fnbTotal.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
-• ⚡ <b>Energie & Strom:</b> ${kpis.energyTotal.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
+• 🥖 <b>F&amp;B (Gastronomie):</b> ${kpis.fnbTotal.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
+• ⚡ <b>Energie &amp; Strom:</b> ${kpis.energyTotal.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
 • 🛎️ <b>OTA (Booking/HRS):</b> ${kpis.otaTotal.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}
 
 <i>Erstellt automatisch vom Antigravity Hotel-Kostenmanager.</i>`;

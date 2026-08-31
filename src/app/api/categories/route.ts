@@ -64,6 +64,14 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Kategoriename erforderlich' }, { status: 400 });
     }
 
+    const existing = await prisma.category.findUnique({
+      where: { name: name.trim() },
+    });
+
+    if (existing && existing.id !== id) {
+      return NextResponse.json({ error: 'Eine Kategorie mit diesem Namen existiert bereits' }, { status: 400 });
+    }
+
     const category = await prisma.category.update({
       where: { id },
       data: {
