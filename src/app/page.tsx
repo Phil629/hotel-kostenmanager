@@ -105,25 +105,29 @@ export default function Dashboard() {
     '2023': '#10b981', // Emerald green
   };
 
-  const calculateAverageExpense = () => {
-    if (!data?.barChartData) return 0;
+  const getYearAverages = () => {
+    if (!data?.barChartData) return {};
     const yearsToConsider = activeChartYears.length > 0 ? activeChartYears : data.availableYears || [];
-    let total = 0;
-    let count = 0;
+    const averages: Record<string, number> = {};
 
-    for (const dataPoint of data.barChartData) {
-      for (const y of yearsToConsider) {
+    for (const y of yearsToConsider) {
+      let total = 0;
+      let count = 0;
+      for (const dataPoint of data.barChartData) {
         const val = dataPoint[y];
         if (typeof val === 'number' && val > 0) {
           total += val;
           count++;
         }
       }
+      if (count > 0) {
+        averages[y] = Math.round(total / count);
+      }
     }
-    return count > 0 ? Math.round(total / count) : 0;
+    return averages;
   };
 
-  const avgMonthlyExpense = calculateAverageExpense();
+  const yearAverages = getYearAverages();
 
   const fetchCategories = async () => {
     try {
@@ -379,12 +383,22 @@ export default function Dashboard() {
                     <h3 className="text-lg font-bold text-slate-900 mb-0.5">Monatlicher Ausgabenvergleich</h3>
                     <p className="text-xs text-slate-500">Vergleich der Gesamtkosten pro Monat (Jan–Dez)</p>
                   </div>
-                  {avgMonthlyExpense > 0 && (
-                    <div className="flex items-center gap-2 px-3 py-1 bg-amber-50/80 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold shadow-2xs self-start sm:self-auto">
-                      <span className="w-3 h-0.5 border-t-2 border-dashed border-amber-600"></span>
-                      <span>Monatl. Ø: <b>{formatEuro(avgMonthlyExpense)}</b></span>
-                    </div>
-                  )}
+                  {/* Dynamic year-specific average chips */}
+                  <div className="flex flex-wrap items-center gap-1.5 self-start sm:self-auto">
+                    {Object.entries(yearAverages).map(([year, avgVal]) => {
+                      const color = yearColors[year] || '#64748b';
+                      return (
+                        <div
+                          key={`chip-${year}`}
+                          className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold shadow-2xs"
+                        >
+                          <span className="w-2.5 h-0.5 border-t-2 border-dashed" style={{ borderColor: color }}></span>
+                          <span className="text-slate-600">Ø {year}:</span>
+                          <b style={{ color }}>{formatEuro(avgVal)}</b>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Interactive Year Selector Pills */}
@@ -435,21 +449,26 @@ export default function Dashboard() {
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)' }}
                       />
                       <Legend />
-                      {avgMonthlyExpense > 0 && (
-                        <ReferenceLine
-                          y={avgMonthlyExpense}
-                          stroke="#f59e0b"
-                          strokeDasharray="5 5"
-                          strokeWidth={2}
-                          label={{
-                            value: `Ø ${formatEuro(avgMonthlyExpense)}`,
-                            position: 'top',
-                            fill: '#d97706',
-                            fontSize: 11,
-                            fontWeight: 700,
-                          }}
-                        />
-                      )}
+                      {/* Render individual dashed average line for each active year */}
+                      {Object.entries(yearAverages).map(([year, avgVal], idx) => {
+                        const color = yearColors[year] || '#64748b';
+                        return (
+                          <ReferenceLine
+                            key={`ref-${year}`}
+                            y={avgVal}
+                            stroke={color}
+                            strokeDasharray="5 5"
+                            strokeWidth={2}
+                            label={{
+                              value: `Ø ${year}: ${formatEuro(avgVal)}`,
+                              position: idx % 2 === 0 ? 'top' : 'insideTopRight',
+                              fill: color,
+                              fontSize: 11,
+                              fontWeight: 700,
+                            }}
+                          />
+                        );
+                      })}
                       {data.availableYears
                         ?.filter((year) => activeChartYears.includes(year))
                         .map((year) => {
