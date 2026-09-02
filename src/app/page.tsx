@@ -69,6 +69,24 @@ export default function Dashboard() {
   // Accordion state for expanded categories
   const [expandedCatIds, setExpandedCatIds] = useState<Set<string>>(new Set());
 
+  // Filter state for hierarchical Year/Month selector
+  const [activeFilterYear, setActiveFilterYear] = useState<string>('all');
+
+  const shortGermanMonths: Record<string, string> = {
+    '01': 'Januar',
+    '02': 'Februar',
+    '03': 'März',
+    '04': 'April',
+    '05': 'Mai',
+    '06': 'Juni',
+    '07': 'Juli',
+    '08': 'August',
+    '09': 'September',
+    '10': 'Oktober',
+    '11': 'November',
+    '12': 'Dezember',
+  };
+
   // Toast / Notification Message
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -244,38 +262,106 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Prominent Month Selector Tabs */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-slate-700 font-semibold text-sm">
-          <span>📅 Zeitfenster / Monatsfilter:</span>
-        </div>
+      {/* Sleek Hierarchical Time & Year/Month Filter */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        {/* Step 1: Year Selector Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
+            <span>📅 Zeitraum auswählen:</span>
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setSelectedMonth('all')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-              selectedMonth === 'all'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            📊 Alle Monate (Gesamt)
-          </button>
-
-          {data?.availableMonths?.map((m) => (
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              key={m.value}
-              onClick={() => setSelectedMonth(m.value)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
-                selectedMonth === m.value
+              onClick={() => {
+                setActiveFilterYear('all');
+                setSelectedMonth('all');
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                activeFilterYear === 'all'
                   ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              {m.label}
+              <span>📊</span>
+              <span>Alle 4 Jahre (Gesamt)</span>
             </button>
-          ))}
+
+            {data?.availableYears?.map((year) => {
+              const isYearActive = activeFilterYear === year;
+              return (
+                <button
+                  key={year}
+                  onClick={() => {
+                    setActiveFilterYear(year);
+                    setSelectedMonth(year);
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                    isYearActive
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span>📅</span>
+                  <span>{year}</span>
+                  {year === '2026' && (
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                      Aktuell
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
+
+        {/* Step 2: Specific Month Selector for the active year */}
+        {activeFilterYear !== 'all' ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
+              <span>Monate im Jahr <b>{activeFilterYear}</b>:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setSelectedMonth(activeFilterYear)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  selectedMonth === activeFilterYear
+                    ? 'bg-blue-600 text-white shadow-2xs'
+                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
+                }`}
+              >
+                📌 Gesamtes Jahr {activeFilterYear}
+              </button>
+
+              {data?.availableMonths
+                ?.filter((m) => m.value.startsWith(`${activeFilterYear}-`))
+                .sort((a, b) => a.value.localeCompare(b.value))
+                .map((m) => {
+                  const isSelected = selectedMonth === m.value;
+                  const monthNum = m.value.split('-')[1];
+                  const monthName = shortGermanMonths[monthNum] || monthNum;
+                  return (
+                    <button
+                      key={m.value}
+                      onClick={() => setSelectedMonth(m.value)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                          : 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
+                      }`}
+                    >
+                      {monthName}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
+            <span>💡 <i>Tipp: Wählen Sie oben ein einzelnes Jahr aus (z. B. 2026), um die einzelnen Monate aufzurufen.</i></span>
+            <span className="font-semibold text-slate-700">Gesamtauswertung aller Buchungen (2023–2026)</span>
+          </div>
+        )}
       </div>
 
       {loading ? (
