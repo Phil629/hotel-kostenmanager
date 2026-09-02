@@ -13,6 +13,7 @@ import {
   YAxis,
   Tooltip,
   Legend,
+  ReferenceLine,
 } from 'recharts';
 
 interface Category {
@@ -70,6 +71,59 @@ export default function Dashboard() {
 
   // Toast / Notification Message
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Interactive Year Filter for Bar Chart
+  const [activeChartYears, setActiveChartYears] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (data?.availableYears && activeChartYears.length === 0) {
+      setActiveChartYears(data.availableYears);
+    }
+  }, [data]);
+
+  const toggleChartYear = (year: string) => {
+    setActiveChartYears((prev) => {
+      if (prev.includes(year)) {
+        if (prev.length === 1) return prev; // Keep at least one
+        return prev.filter((y) => y !== year);
+      } else {
+        return [...prev, year].sort().reverse();
+      }
+    });
+  };
+
+  const selectAllChartYears = () => {
+    if (data?.availableYears) {
+      setActiveChartYears(data.availableYears);
+    }
+  };
+
+  const yearColors: Record<string, string> = {
+    '2026': '#2563eb', // Blue
+    '2025': '#475569', // Slate / Dark
+    '2024': '#0284c7', // Sky blue
+    '2023': '#10b981', // Emerald green
+  };
+
+  const calculateAverageExpense = () => {
+    if (!data?.barChartData) return 0;
+    const yearsToConsider = activeChartYears.length > 0 ? activeChartYears : data.availableYears || [];
+    let total = 0;
+    let count = 0;
+
+    for (const dataPoint of data.barChartData) {
+      for (const y of yearsToConsider) {
+        const val = dataPoint[y];
+        if (typeof val === 'number' && val > 0) {
+          total += val;
+          count++;
+        }
+      }
+    }
+    return count > 0 ? Math.round(total / count) : 0;
+  };
+
+  const avgMonthlyExpense = calculateAverageExpense();
 
   const fetchCategories = async () => {
     try {
@@ -317,15 +371,63 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Bar Chart - Monthly Comparison */}
+            {/* Bar Chart - Monthly Comparison with Interactive Year Selection & Dashed Average Line */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1">Monatlicher Ausgabenvergleich</h3>
-                <p className="text-xs text-slate-500 mb-4">Vergleich der Gesamtkosten pro Monat</p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900 mb-0.5">Monatlicher Ausgabenvergleich</h3>
+                    <p className="text-xs text-slate-500">Vergleich der Gesamtkosten pro Monat (Jan–Dez)</p>
+                  </div>
+                  {avgMonthlyExpense > 0 && (
+                    <div className="flex items-center gap-2 px-3 py-1 bg-amber-50/80 border border-amber-200 text-amber-900 rounded-lg text-xs font-semibold shadow-2xs self-start sm:self-auto">
+                      <span className="w-3 h-0.5 border-t-2 border-dashed border-amber-600"></span>
+                      <span>Monatl. Ø: <b>{formatEuro(avgMonthlyExpense)}</b></span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Interactive Year Selector Pills */}
+                <div className="flex flex-wrap items-center gap-1.5 mb-4 pb-3 border-b border-slate-100 text-xs">
+                  <span className="text-slate-500 font-medium mr-1 text-[11px]">Jahre filtern:</span>
+                  <button
+                    onClick={selectAllChartYears}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer ${
+                      activeChartYears.length === (data.availableYears?.length || 0)
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Alle
+                  </button>
+                  {data.availableYears?.map((year) => {
+                    const isSelected = activeChartYears.includes(year);
+                    const color = yearColors[year] || '#64748b';
+                    return (
+                      <button
+                        key={year}
+                        onClick={() => toggleChartYear(year)}
+                        style={{
+                          backgroundColor: isSelected ? color : '#f1f5f9',
+                          color: isSelected ? '#ffffff' : '#64748b',
+                        }}
+                        className={`px-3 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1.5 shadow-2xs hover:opacity-90`}
+                        title={`Klicken zum Ein-/Ausblenden von ${year}`}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: isSelected ? '#ffffff' : color }}
+                        />
+                        <span>{year}</span>
+                        {isSelected && <span className="text-[10px] opacity-80">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
 
                 <div className="h-72 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={data.barChartData}>
+                    <BarChart data={data.barChartData} margin={{ top: 15, right: 10, left: -15, bottom: 0 }}>
                       <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(v / 1000)}k€`} />
                       <Tooltip
@@ -333,18 +435,35 @@ export default function Dashboard() {
                         contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)' }}
                       />
                       <Legend />
-                      {data.availableYears?.map((year, i) => {
-                        const colors = ['#2563eb', '#64748b', '#0ea5e9', '#10b981', '#f59e0b', '#8b5cf6'];
-                        return (
-                          <Bar 
-                            key={year} 
-                            dataKey={year} 
-                            fill={colors[i % colors.length]} 
-                            radius={[4, 4, 0, 0]} 
-                            name={year} 
-                          />
-                        );
-                      })}
+                      {avgMonthlyExpense > 0 && (
+                        <ReferenceLine
+                          y={avgMonthlyExpense}
+                          stroke="#f59e0b"
+                          strokeDasharray="5 5"
+                          strokeWidth={2}
+                          label={{
+                            value: `Ø ${formatEuro(avgMonthlyExpense)}`,
+                            position: 'top',
+                            fill: '#d97706',
+                            fontSize: 11,
+                            fontWeight: 700,
+                          }}
+                        />
+                      )}
+                      {data.availableYears
+                        ?.filter((year) => activeChartYears.includes(year))
+                        .map((year) => {
+                          const color = yearColors[year] || '#64748b';
+                          return (
+                            <Bar 
+                              key={year} 
+                              dataKey={year} 
+                              fill={color} 
+                              radius={[4, 4, 0, 0]} 
+                              name={year} 
+                            />
+                          );
+                        })}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
