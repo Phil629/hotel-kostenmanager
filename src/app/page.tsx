@@ -313,163 +313,104 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Sleek Hierarchical Time & Year/Month Filter with Direct Stepper */}
+      {/* Sleek Hierarchical Time & Year/Month Filter */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        {/* Top Control Bar: Stepper + Direct Select Dropdown */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-900 font-bold text-sm">📅 Auswertungszeitraum:</span>
-            <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-50 text-blue-700 border border-blue-200/60">
-              {selectedMonth === 'all'
-                ? '📊 Alle 4 Jahre (2023–2026)'
-                : selectedMonth.length === 4
-                ? `📅 Gesamtes Jahr ${selectedMonth}`
-                : `📍 ${shortGermanMonths[selectedMonth.split('-')[1]] || ''} ${selectedMonth.split('-')[0]}`}
-            </span>
-          </div>
-
-          {/* Quick 1-Click Stepper & Dropdown */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrevMonth}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-              title="Zum vorherigen Monat wechseln"
-            >
-              <span>◀</span>
-              <span className="hidden sm:inline">Vormonat</span>
-            </button>
-
-            {/* Direct Jump Dropdown */}
-            <select
-              value={selectedMonth}
-              onChange={(e) => handleSelectMonthDirect(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-2xs"
-            >
-              <option value="all">📊 Alle 4 Jahre zusammengefasst</option>
-              {data?.availableYears?.map((year) => (
-                <optgroup key={`grp-${year}`} label={`── Jahr ${year} ──`}>
-                  <option value={year}>📅 Gesamtes Jahr {year}</option>
-                  {data?.availableMonths
-                    ?.filter((m) => m.value.startsWith(`${year}-`))
-                    .sort((a, b) => b.value.localeCompare(a.value))
-                    .map((m) => {
-                      const mNum = m.value.split('-')[1];
-                      const mName = shortGermanMonths[mNum] || mNum;
-                      return (
-                        <option key={m.value} value={m.value}>
-                          &nbsp;&nbsp;↳ {mName} {year}
-                        </option>
-                      );
-                    })}
-                </optgroup>
-              ))}
-            </select>
-
-            <button
-              onClick={handleNextMonth}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-              title="Zum nächsten Monat wechseln"
-            >
-              <span className="hidden sm:inline">Nächster</span>
-              <span>▶</span>
-            </button>
-
-            {selectedMonth !== 'all' && (
-              <button
-                onClick={() => {
-                  setSelectedMonth('all');
-                  setActiveFilterYear('all');
-                }}
-                className="px-2.5 py-1.5 bg-slate-100 hover:bg-red-50 hover:text-red-600 text-slate-500 rounded-xl text-xs font-bold transition cursor-pointer"
-                title="Zurück zur Gesamtübersicht"
-              >
-                ✕ Reset
-              </button>
-            )}
-          </div>
-        </div>
-
         {/* Step 1: Quick Year Tabs */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-slate-500 font-medium text-xs mr-1">Jahre:</span>
-          <button
-            onClick={() => {
-              setActiveFilterYear('all');
-              setSelectedMonth('all');
-            }}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-              activeFilterYear === 'all' && selectedMonth === 'all'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-            }`}
-          >
-            <span>📊</span>
-            <span>Alle 4 Jahre</span>
-          </button>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
+            <span>📅 Zeitraum auswählen:</span>
+          </div>
 
-          {data?.availableYears?.map((year) => {
-            const isYearActive = activeFilterYear === year;
-            return (
-              <button
-                key={year}
-                onClick={() => {
-                  setActiveFilterYear(year);
-                  setSelectedMonth(year);
-                }}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                  isYearActive
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                }`}
-              >
-                <span>📅</span>
-                <span>{year}</span>
-                {year === '2026' && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                    Aktuell
-                  </span>
-                )}
-              </button>
-            );
-          })}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => {
+                setActiveFilterYear('all');
+                setSelectedMonth('all');
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                activeFilterYear === 'all' && selectedMonth === 'all'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span>📊</span>
+              <span>Alle 4 Jahre</span>
+            </button>
+
+            {data?.availableYears?.map((year) => {
+              const isYearActive = activeFilterYear === year;
+              return (
+                <button
+                  key={year}
+                  onClick={() => {
+                    setActiveFilterYear(year);
+                    setSelectedMonth(year);
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                    isYearActive
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span>📅</span>
+                  <span>{year}</span>
+                  {year === '2026' && (
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                      Aktuell
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Step 2: Specific Month Selector for the active year */}
-        {activeFilterYear !== 'all' && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
-            <span className="text-slate-500 font-medium text-xs mr-1">Monate:</span>
-            <button
-              onClick={() => setSelectedMonth(activeFilterYear)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                selectedMonth === activeFilterYear
-                  ? 'bg-blue-600 text-white shadow-2xs'
-                  : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
-              }`}
-            >
-              📌 Ganzes Jahr {activeFilterYear}
-            </button>
+        {activeFilterYear !== 'all' ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
+              <span>Monate im Jahr <b>{activeFilterYear}</b>:</span>
+            </div>
 
-            {data?.availableMonths
-              ?.filter((m) => m.value.startsWith(`${activeFilterYear}-`))
-              .sort((a, b) => a.value.localeCompare(b.value))
-              .map((m) => {
-                const isSelected = selectedMonth === m.value;
-                const monthNum = m.value.split('-')[1];
-                const monthName = shortGermanMonths[monthNum] || monthNum;
-                return (
-                  <button
-                    key={m.value}
-                    onClick={() => setSelectedMonth(m.value)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                      isSelected
-                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
-                        : 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
-                    }`}
-                  >
-                    {monthName}
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setSelectedMonth(activeFilterYear)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  selectedMonth === activeFilterYear
+                    ? 'bg-blue-600 text-white shadow-2xs'
+                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
+                }`}
+              >
+                📌 Ganzes Jahr {activeFilterYear}
+              </button>
+
+              {data?.availableMonths
+                ?.filter((m) => m.value.startsWith(`${activeFilterYear}-`))
+                .sort((a, b) => a.value.localeCompare(b.value))
+                .map((m) => {
+                  const isSelected = selectedMonth === m.value;
+                  const monthNum = m.value.split('-')[1];
+                  const monthName = shortGermanMonths[monthNum] || monthNum;
+                  return (
+                    <button
+                      key={m.value}
+                      onClick={() => setSelectedMonth(m.value)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        isSelected
+                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                          : 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
+                      }`}
+                    >
+                      {monthName}
+                    </button>
+                  );
+                })}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
+            <span>💡 <i>Wählen Sie oben ein einzelnes Jahr aus (z. B. 2026), um die einzelnen Monate aufzurufen.</i></span>
+            <span className="font-semibold text-slate-700">Gesamtauswertung aller Buchungen (2023–2026)</span>
           </div>
         )}
       </div>
