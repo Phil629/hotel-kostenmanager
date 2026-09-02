@@ -15,12 +15,13 @@ export interface RawParsedTransaction {
 
 export function generateRawHash(date: Date, amount: number, payee: string, description: string): string {
   const dateStr = date instanceof Date && !isNaN(date.getTime()) ? date.toISOString().split('T')[0] : '1970-01-01';
-  const payload = `${dateStr}_${amount.toFixed(2)}_${(payee || '').trim().toLowerCase()}_${(description || '').trim().toLowerCase()}`;
+  const numAmount = typeof amount === 'number' && !isNaN(amount) ? amount : 0;
+  const payload = `${dateStr}_${numAmount.toFixed(2)}_${(payee || '').trim().toLowerCase()}_${(description || '').trim().toLowerCase()}`;
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
 export function parseAmount(val: string | number): number {
-  if (typeof val === 'number') return val;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
   if (!val) return 0;
 
   let cleanStr = val.toString().trim();
@@ -36,7 +37,15 @@ export function parseAmount(val: string | number): number {
   cleanStr = cleanStr.replace(/[€$£\s]/g, '');
 
   if (cleanStr.includes(',') && cleanStr.includes('.')) {
-    cleanStr = cleanStr.replace(/\./g, '').replace(',', '.');
+    const lastComma = cleanStr.lastIndexOf(',');
+    const lastDot = cleanStr.lastIndexOf('.');
+    if (lastComma > lastDot) {
+      // German format: 1.234,56
+      cleanStr = cleanStr.replace(/\./g, '').replace(',', '.');
+    } else {
+      // US format: 1,234.56
+      cleanStr = cleanStr.replace(/,/g, '');
+    }
   } else if (cleanStr.includes(',')) {
     cleanStr = cleanStr.replace(',', '.');
   }
@@ -74,16 +83,38 @@ export function parseDate(val: string): Date {
     }
   }
 
+  if (trimmed.includes('-')) {
+    const parts = trimmed.split('-');
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        // YYYY-MM-DD
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        return new Date(Date.UTC(year, month, day));
+      } else {
+        // DD-MM-YYYY
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        let year = parseInt(parts[2], 10);
+        if (year < 100) year += 2000;
+        return new Date(Date.UTC(year, month, day));
+      }
+    }
+  }
+
   const parsed = new Date(trimmed);
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
 export async function parseCSVContent(csvText: string): Promise<RawParsedTransaction[]> {
   return new Promise((resolve, reject) => {
-    Papa.parse(csvText, {
+    // Strip UTF-8 BOM if present
+    const cleanCsvText = (csvText || '').replace(/^\uFEFF/, '').trim();
+
+    Papa.parse(cleanCsvText, {
       header: true,
       skipEmptyLines: 'greedy',
-      delimiter: ';', // Auto-detect or default semicolon for German Volksbank CSVs
       dynamicTyping: false,
       complete: (results) => {
         const parsed: RawParsedTransaction[] = [];

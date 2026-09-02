@@ -5,6 +5,7 @@ import { parseCSVContent, parseCAMT053Content } from '../../../lib/parsers';
 
 export const revalidate = 0;
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 const monthNamesGerman: Record<string, string> = {
   '01': 'Januar',
@@ -152,13 +153,14 @@ export async function POST(req: NextRequest) {
     const fileText = await file.text();
     let rawTransactions = [];
 
-    if (fileType === 'xml' || file.name.endsWith('.xml')) {
+    const isXml = fileType === 'xml' || (typeof file.name === 'string' && file.name.endsWith('.xml'));
+    if (isXml) {
       rawTransactions = parseCAMT053Content(fileText);
     } else {
       rawTransactions = await parseCSVContent(fileText);
     }
 
-    if (rawTransactions.length === 0) {
+    if (!rawTransactions || rawTransactions.length === 0) {
       return NextResponse.json({ error: 'Keine gültigen Umsätze in der Datei gefunden' }, { status: 400 });
     }
 
@@ -187,6 +189,8 @@ export async function POST(req: NextRequest) {
         skippedCount++;
         continue;
       }
+      // Add to set to also avoid duplicates within the SAME file batch
+      existingHashMap.add(raw.rawHash);
 
       const match = await matchTransaction(raw.iban, raw.payee, raw.description, preloadedRules);
 
@@ -207,14 +211,16 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. Bulk insert new transactions
-    if (newTransactionsData.length > 0) {
+    // 3. Bulk insert new transactions in chunks of 500
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < newTransactionsData.length; i += CHUNK_SIZE) {
+      const chunk = newTransactionsData.slice(i, i + CHUNK_SIZE);
       await prisma.transaction.createMany({
-        data: newTransactionsData,
+        data: chunk,
         skipDuplicates: true,
       });
-      importedCount = newTransactionsData.length;
     }
+    importedCount = newTransactionsData.length;
 
     return NextResponse.json({
       success: true,
@@ -224,6 +230,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('Error importing transactions:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Interner Serverfehler beim Import' }, { status: 500 });
   }
 }

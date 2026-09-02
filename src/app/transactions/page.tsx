@@ -126,13 +126,28 @@ export default function TransactionsPage() {
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('type', file.name.endsWith('.xml') ? 'xml' : 'csv');
+    formData.append('type', file.name && file.name.endsWith('.xml') ? 'xml' : 'csv');
 
     try {
       const res = await fetch('/api/transactions', {
         method: 'POST',
         body: formData,
       });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        if (res.status === 401 || text.includes('anmelden') || text.includes('Login')) {
+          setUploadMessage('❌ Sitzung abgelaufen. Bitte Seite neu laden und erneut einloggen.');
+        } else if (res.status === 413) {
+          setUploadMessage('❌ Die Datei ist zu groß für den Upload.');
+        } else if (res.status === 502 || res.status === 504) {
+          setUploadMessage('❌ Server-Timeout bei der Verarbeitung. Bitte kurz warten und erneut versuchen.');
+        } else {
+          setUploadMessage(`❌ Serverfehler (${res.status}): Bitte überprüfen Sie die Verbindung.`);
+        }
+        return;
+      }
 
       const data = await res.json();
       if (data.error) {
