@@ -48,6 +48,9 @@ export async function POST(req: NextRequest) {
       auth: { user, pass },
       logger: false,
     });
+    client.on('error', (err) => {
+      console.error('IMAP socket error:', err.message);
+    });
 
     await client.connect();
 
@@ -92,6 +95,16 @@ export async function POST(req: NextRequest) {
           const subject = parsed.subject || msg.envelope?.subject || 'Ohne Betreff';
           const fromText = parsed.from?.text || '';
           const emailDate = parsed.date || msg.envelope?.date || new Date();
+          const htmlAsText = parsed.html
+            ? String(parsed.html)
+                .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/gi, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+            : '';
+          const fullBodyText = (parsed.text || '').trim() || htmlAsText;
 
           // Alle PDF-Anhänge dieser E-Mail finden
           const pdfAttachments = (parsed.attachments || []).filter(
@@ -99,6 +112,14 @@ export async function POST(req: NextRequest) {
               att.contentType === 'application/pdf' ||
               (att.filename && att.filename.toLowerCase().endsWith('.pdf'))
           );
+
+          // Selbst weitergeleitete Kopien ("Fwd:" / "WG:" vom eigenen Konto ohne eigenes PDF) überspringen,
+          // da die Original-Mail bereits im selben Ordner liegt.
+          const isSelfForward =
+            pdfAttachments.length === 0 &&
+            fromText.toLowerCase().includes(user.toLowerCase()) &&
+            /^(fwd|wg):/i.test(subject.trim());
+          if (isSelfForward) continue;
 
           if (pdfAttachments.length > 0) {
             for (let idx = 0; idx < pdfAttachments.length; idx++) {
@@ -112,7 +133,7 @@ export async function POST(req: NextRequest) {
                 fileName,
                 emailSubject: subject,
                 emailFrom: fromText,
-                emailText: parsed.text || '',
+                emailText: fullBodyText,
               });
 
               const created = await prisma.invoice.create({
@@ -148,7 +169,7 @@ export async function POST(req: NextRequest) {
             const msgUid = `${baseUid}:body`;
             if (existingUidSet.has(msgUid)) continue;
 
-            const bodyText = (parsed.text || '').trim();
+            const bodyText = fullBodyText;
             if (bodyText.length < 30) continue;
 
             const analysis = await analyzeInvoiceDocument({

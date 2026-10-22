@@ -1,4 +1,4 @@
-import { getActiveGeminiApiKey } from './invoiceMatcher';
+import { getActiveGeminiApiKey, isIgnoredFallbackCategory } from './invoiceMatcher';
 
 export interface GeminiSuggestionResult {
   suggestedCategoryId: string | null;
@@ -25,13 +25,16 @@ export async function suggestCategoryWithGemini(
 ): Promise<GeminiSuggestionResult> {
   const apiKey = await getActiveGeminiApiKey();
 
-  const categoriesPrompt = categories
+  // "Sonstiges" strikt ausschließen, damit die KI niemals blind auf "Sonstiges" ausweicht
+  const allowedCategories = categories.filter((c) => !isIgnoredFallbackCategory(c.name));
+
+  const categoriesPrompt = allowedCategories
     .map((c) => `- ID: "${c.id}", Name: "${c.name}"${c.description ? ` (${c.description})` : ''}`)
     .join('\n');
 
   const promptText = `Du bist der KI-Kosten-Assistent für ein Hotel. Ordne folgenden Bankumsatz der am besten passenden Hotel-Kategorie zu.
 
-**Verfügbare Kategorien:**
+**Verfügbare Kategorien (WICHTIG: "Sonstiges" darf NIEMALS verwendet werden):**
 ${categoriesPrompt}
 
 **Transaktion:**
@@ -39,10 +42,12 @@ ${categoriesPrompt}
 - Verwendungszweck: ${tx.description}
 - Betrag: ${tx.amount} EUR
 
+WICHTIG: Wenn der Umsatz nicht eindeutig zu einer der genannten spezifischen Kategorien passt oder du dir unsicher bist (z. B. reine PayPal-Abbuchung ohne Artikelhinweis), setze "suggestedCategoryId" und "suggestedCategoryName" zwingend auf null!
+
 Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
 {
-  "suggestedCategoryId": "Kategorie-ID aus der Liste",
-  "suggestedCategoryName": "Exakter Name der Kategorie",
+  "suggestedCategoryId": "Kategorie-ID aus der Liste oder null",
+  "suggestedCategoryName": "Exakter Name der Kategorie oder null",
   "confidenceScore": 0.95,
   "reasoning": "Kurze Begründung auf Deutsch"
 }`;
@@ -51,7 +56,7 @@ Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
     const descLower = tx.description.toLowerCase();
     const payeeLower = (tx.payee || '').toLowerCase();
 
-    for (const cat of categories) {
+    for (const cat of allowedCategories) {
       const catLower = cat.name.toLowerCase();
       if (catLower.includes('getränke') && (descLower.includes('wein') || descLower.includes('bier') || payeeLower.includes('getränk'))) {
         return {
@@ -71,40 +76,50 @@ Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
       }
     }
 
-    const fallbackCat = categories[0];
     return {
-      suggestedCategoryId: fallbackCat?.id || null,
-      suggestedCategoryName: fallbackCat?.name || null,
-      confidenceScore: 0.7,
-      reasoning: 'Simulierter Vorschlag (Hinterlegen Sie unter "Rechnungs-KI" Ihren kostenlosen Gemini API-Key für echte KI-Analysen).',
+      suggestedCategoryId: null,
+      suggestedCategoryName: null,
+      confidenceScore: 0,
+      reasoning: 'Keine eindeutige Kategorie erkannt (Kategorie "Sonstiges" wird bewusst ignoriert).',
     };
   }
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: promptText }] }],
+          generationConfig: { temperature: 0.1 },
         }),
       }
     );
 
     const data = await response.json();
-    const textResp = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const resParts: any[] = data.candidates?.[0]?.content?.parts || [];
+    const textPart =
+      resParts.filter((p) => typeof p.text === 'string' && !p.thought).pop() ||
+      resParts.filter((p) => typeof p.text === 'string').pop();
+    const textResp = textPart?.text;
 
     if (!textResp) {
       throw new Error('Keine Antwort von Gemini API erhalten');
     }
 
-    const cleanJsonText = textResp.replace(/```json/g, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleanJsonText);
+    const cleanJsonText = textResp.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const jsonMatch = cleanJsonText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('Ungültige JSON-Antwort von Gemini API');
+    }
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    const validCat = allowedCategories.find((c) => c.id === parsed.suggestedCategoryId);
 
     return {
-      suggestedCategoryId: parsed.suggestedCategoryId || null,
-      suggestedCategoryName: parsed.suggestedCategoryName || null,
+      suggestedCategoryId: validCat ? validCat.id : null,
+      suggestedCategoryName: validCat ? validCat.name : null,
       confidenceScore: typeof parsed.confidenceScore === 'number' ? parsed.confidenceScore : 0.85,
       reasoning: parsed.reasoning || 'Gemini KI Zuordnungsvorschlag',
     };

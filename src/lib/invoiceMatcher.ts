@@ -61,6 +61,15 @@ export async function getActiveGeminiApiKey(): Promise<string | null> {
 }
 
 /**
+ * Prüft, ob es sich bei einer Kategorie um eine Sammel-/Sonstiges-Kategorie handelt,
+ * die von der KI niemals automatisch zugewiesen werden darf.
+ */
+export function isIgnoredFallbackCategory(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n === 'sonstiges' || n === 'sonstige' || n.startsWith('sonstig');
+}
+
+/**
  * Analysiert eine PDF-Rechnung (oder E-Mail) mit Gemini KI (oder lokalem Text-Fallback)
  * und extrahiert Betrag, Lieferant, Datum, Rechnungsnummer, gekaufte Artikel & passende Hotel-Kategorie.
  */
@@ -71,7 +80,9 @@ export async function analyzeInvoiceDocument(params: {
   emailFrom?: string | null;
   emailText?: string | null;
 }): Promise<ExtractedInvoiceData> {
-  const categories = await prisma.category.findMany({ orderBy: { name: 'asc' } });
+  const allCategories = await prisma.category.findMany({ orderBy: { name: 'asc' } });
+  // "Sonstiges" komplett ausschließen, damit die KI bei Unsicherheit niemals auf "Sonstiges" ausweicht
+  const categories = allCategories.filter((c) => !isIgnoredFallbackCategory(c.name));
   const apiKey = await getActiveGeminiApiKey();
 
   const pdfText = params.pdfBuffer ? await extractTextFromPdfBuffer(params.pdfBuffer) : '';
@@ -92,7 +103,7 @@ export async function analyzeInvoiceDocument(params: {
     const prompt = `Du bist der KI-Buchhaltungs-Assistent für das City Hotel Schottenhof.
 Lies die beigefügte Eingangsrechnung (PDF / E-Mail) aus und extrahiere die Rechnungsdaten sowie die passende Hotel-Ausgabenkategorie.
 
-Verfügbare Hotel-Kategorien:
+Verfügbare Hotel-Kategorien (Hinweis: "Sonstiges" darf NIEMALS verwendet werden):
 ${categoriesPrompt}
 
 Zusätzliche Metadaten / erkannter Text:
@@ -104,7 +115,7 @@ WICHTIG:
 - "invoiceDate" im Format "YYYY-MM-DD" (oder null).
 - "itemsSummary": kurze, prägnante deutsche Beschreibung, was konkret gekauft/berechnet wurde (z.B. "20 Kartons Toilettenpapier & Hygienebedarf").
 - "paymentMethod": falls erkennbar z.B. "PayPal", "Lastschrift", "Überweisung", "Kreditkarte" oder null.
-- "suggestedCategoryId": die exakt passende Kategorie-ID aus der obigen Liste.
+- "suggestedCategoryId": die exakt passende Kategorie-ID aus der obigen Liste. Wenn du dir nicht sicher bist oder keine spezifische Kategorie passt, gib zwingend null zurück (NIEMALS raten oder "Sonstiges" wählen!).
 
 Antworte AUSSCHLIESSLICH mit gültigem JSON (ohne Markdown-Codeblock):
 {
@@ -114,7 +125,7 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (ohne Markdown-Codeblock):
   "grossAmount": 750.00,
   "itemsSummary": "Kurze Beschreibung der Artikel/Leistung",
   "paymentMethod": "PayPal",
-  "suggestedCategoryId": "UUID der passenden Kategorie",
+  "suggestedCategoryId": "UUID der passenden Kategorie oder null",
   "confidence": 0.95
 }`;
 
@@ -128,7 +139,7 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (ohne Markdown-Codeblock):
       });
     }
 
-    const models = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    const models = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemma-4-31b-it'];
     for (const model of models) {
       try {
         const res = await fetch(
@@ -145,11 +156,17 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (ohne Markdown-Codeblock):
 
         if (!res.ok) continue;
         const data = await res.json();
-        const textResp = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const resParts: any[] = data.candidates?.[0]?.content?.parts || [];
+        const textPart =
+          resParts.filter((p) => typeof p.text === 'string' && !p.thought).pop() ||
+          resParts.filter((p) => typeof p.text === 'string').pop();
+        const textResp = textPart?.text;
         if (!textResp) continue;
 
         const cleanJson = textResp.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleanJson);
+        const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) continue;
+        const parsed = JSON.parse(jsonMatch[0]);
 
         const validCat = categories.find((c) => c.id === parsed.suggestedCategoryId);
         const amountNum =
@@ -166,7 +183,7 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON (ohne Markdown-Codeblock):
           grossAmount: amountNum,
           itemsSummary: parsed.itemsSummary || null,
           paymentMethod: parsed.paymentMethod || null,
-          suggestedCategoryId: validCat ? validCat.id : categories[0]?.id || null,
+          suggestedCategoryId: validCat ? validCat.id : null,
           confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.9,
           usedAi: true,
         };
@@ -228,11 +245,11 @@ function heuristicParseInvoice(
     ? 'Kreditkarte'
     : null;
 
-  // 5. Kategorie & Zusammenfassung über Stichwörter
+  // 5. Kategorie & Zusammenfassung über Stichwörter (ohne "Sonstiges"-Fallback!)
   const keywordRules: Array<{ keywords: string[]; catMatch: string[]; label: string }> = [
     {
       keywords: ['toilettenpapier', 'klopapier', 'seife', 'reinigung', 'putzmittel', 'hygiene', 'handtuch', 'wäsche', 'waschmittel', 'desinfektion'],
-      catMatch: ['reinigung', 'hygiene', 'wäsche', 'zimmer', 'betriebsbedarf', 'sonstige'],
+      catMatch: ['reinigung', 'hygiene', 'wäsche', 'zimmer', 'betriebsbedarf'],
       label: 'Hygiene- & Reinigungsbedarf',
     },
     {
@@ -246,7 +263,7 @@ function heuristicParseInvoice(
       label: 'Getränkelieferung',
     },
     {
-      keywords: ['reparatur', 'wartung', 'handwerker', 'sanitär', 'elektro', 'heizung', 'instandhaltung', 'ersatzteil', 'maler', 'schlüsseldienst'],
+      keywords: ['reparatur', 'wartung', 'handwerker', 'sanitär', 'elektro', 'heizung', 'instandhaltung', 'ersatzteil', 'maler', 'schlüsseldienst', 'leuchtstoff', 'lampe', 'leuchtmittel'],
       catMatch: ['instandhaltung', 'reparatur', 'wartung'],
       label: 'Reparatur & Instandhaltung',
     },
@@ -262,7 +279,7 @@ function heuristicParseInvoice(
     },
     {
       keywords: ['software', 'lizenz', 'hosting', 'domain', 'telefon', 'internet', 'telekom', 'vodafone', 'drucker', 'papier', 'büro'],
-      catMatch: ['it', 'büro', 'verwaltung', 'telefon', 'sonstige'],
+      catMatch: ['it', 'büro', 'verwaltung', 'telefon'],
       label: 'IT & Bürobedarf',
     },
   ];
@@ -275,7 +292,9 @@ function heuristicParseInvoice(
     if (matchedKw.length > 0) {
       itemsSummary = `${rule.label} (${matchedKw.slice(0, 3).join(', ')})`;
       for (const m of rule.catMatch) {
-        const found = categories.find((c) => c.name.toLowerCase().includes(m));
+        const found = categories.find(
+          (c) => !isIgnoredFallbackCategory(c.name) && c.name.toLowerCase().includes(m)
+        );
         if (found) {
           suggestedCategoryId = found.id;
           break;
@@ -285,10 +304,8 @@ function heuristicParseInvoice(
     }
   }
 
-  if (!suggestedCategoryId && categories.length > 0) {
-    const fallback = categories.find((c) => c.name.toLowerCase().includes('sonstige')) || categories[0];
-    suggestedCategoryId = fallback.id;
-  }
+  // Bewusst KEIN Fallback auf "Sonstiges" oder categories[0]:
+  // Wenn keine spezifische Kategorie sicher erkannt wurde, bleibt suggestedCategoryId = null.
 
   const vendorName = emailFrom
     ? emailFrom.replace(/<.*>/, '').replace(/"/g, '').trim()
@@ -302,7 +319,7 @@ function heuristicParseInvoice(
     itemsSummary: itemsSummary || `Rechnung ${fileName}`,
     paymentMethod,
     suggestedCategoryId,
-    confidence: 0.75,
+    confidence: suggestedCategoryId ? 0.75 : 0.4,
     usedAi: false,
   };
 }
@@ -321,28 +338,34 @@ export function isGenericPaymentProvider(payee: string | null, description: stri
 }
 
 /**
- * Sucht für eine Rechnung den passenden Bankumsatz (insbesondere unkategorisierte / PayPal-Umsätze)
- * und ordnet die Kategorie automatisch zu, ohne eine falsche PayPal-Dauerregel zu erstellen.
+ * Sucht für eine Rechnung den passenden OFFENEN (unkategorisierten) Bankumsatz
+ * und ordnet die Kategorie automatisch zu, ohne bereits zugeordnete Umsätze zu verändern.
  */
 export async function matchInvoiceToTransaction(invoiceId: string): Promise<{
   matched: boolean;
   transactionId: string | null;
   autoCategorized: boolean;
 }> {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { suggestedCategory: true },
+  });
   if (!invoice || !invoice.grossAmount || invoice.grossAmount <= 0) {
     return { matched: false, transactionId: null, autoCategorized: false };
   }
 
   const targetAmount = invoice.grossAmount;
 
-  // Kandidaten: Ausgaben mit gleichem Betrag (± 0,02 €), die noch keiner anderen Rechnung zugeordnet sind
+  // WICHTIG: Bereits zugeordnete Umsätze (manuell oder per Regel kategorisiert) werden komplett ignoriert!
+  // Es werden ausschließlich offene/unkategorisierte Umsätze (status = 'UNCATEGORIZED' & categoryId = null) berücksichtigt.
   const candidates = await prisma.transaction.findMany({
     where: {
       amount: {
         gte: -(targetAmount + 0.02),
         lte: -(targetAmount - 0.02),
       },
+      status: 'UNCATEGORIZED',
+      categoryId: null,
       invoice: { is: null },
     },
     orderBy: { date: 'desc' },
@@ -371,10 +394,8 @@ export async function matchInvoiceToTransaction(invoiceId: string): Promise<{
         score -= 50; // Zu weit entfernt
       }
 
-      // Unkategorisierte Umsätze bevorzugen
-      if (tx.status === 'UNCATEGORIZED' || !tx.categoryId) {
-        score += 40;
-      }
+      // Unkategorisierte Umsätze
+      score += 40;
 
       // PayPal / Kreditkarte / Sammel-Zahlungsdienstleister bevorzugen
       if (isGenericPaymentProvider(tx.payee, tx.description)) {
@@ -416,9 +437,14 @@ export async function matchInvoiceToTransaction(invoiceId: string): Promise<{
   }
 
   const best = scored[0].tx;
-  const shouldUpdateCategory =
-    !!invoice.suggestedCategoryId &&
-    (best.status === 'UNCATEGORIZED' || !best.categoryId || isGenericPaymentProvider(best.payee, best.description));
+  const validCategoryId =
+    invoice.suggestedCategoryId &&
+    invoice.suggestedCategory &&
+    !isIgnoredFallbackCategory(invoice.suggestedCategory.name)
+      ? invoice.suggestedCategoryId
+      : null;
+
+  const shouldUpdateCategory = !!validCategoryId;
 
   // Hinweis mit Rechnungsinhalt an den Verwendungszweck anhängen (falls noch nicht vorhanden)
   const invoiceNote = [
@@ -445,7 +471,7 @@ export async function matchInvoiceToTransaction(invoiceId: string): Promise<{
         description: updatedDescription,
         ...(shouldUpdateCategory
           ? {
-              categoryId: invoice.suggestedCategoryId,
+              categoryId: validCategoryId,
               status: 'CATEGORIZED',
             }
           : {}),
