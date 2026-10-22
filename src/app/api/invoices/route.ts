@@ -12,6 +12,9 @@ export const maxDuration = 60;
 export async function GET() {
   try {
     const invoices = await prisma.invoice.findMany({
+      where: {
+        status: { not: 'SKIPPED' },
+      },
       include: {
         suggestedCategory: true,
         matchedTransaction: {

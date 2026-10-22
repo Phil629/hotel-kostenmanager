@@ -65,148 +65,228 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, folders });
     }
 
-    // Aktion 2: Rechnungen aus dem gewählten Gmail-Ordner synchronisieren
+    // Aktion 2: Alle noch nicht geprüften E-Mails aus dem gewählten Gmail-Ordner in Batches synchronisieren
     const lock = await client.getMailboxLock(folder);
     let newInvoicesCount = 0;
     let matchedCount = 0;
     let autoCategorizedCount = 0;
     let scannedEmails = 0;
+    let remainingUnseenCount = 0;
+    let totalFolderEmails = 0;
 
     try {
       const status = client.mailbox;
       const totalMessages = status && typeof status === 'object' && 'exists' in status ? Number(status.exists) : 0;
+      totalFolderEmails = totalMessages;
 
       if (totalMessages > 0) {
-        const startSeq = Math.max(1, totalMessages - maxMessages + 1);
-        const range = `${startSeq}:*`;
-
+        // 1. Alle bereits in der Datenbank verarbeiteten (oder übersprungenen) Gmail-UIDs dieses Ordners laden
         const existingUids = await prisma.invoice.findMany({
-          where: { messageUid: { not: null } },
+          where: { messageUid: { startsWith: `${folder}:` } },
           select: { messageUid: true },
         });
         const existingUidSet = new Set(existingUids.map((i) => i.messageUid));
+        const processedMsgUidNumbers = new Set<number>();
+        const prefix = `${folder}:`;
+        for (const row of existingUids) {
+          if (!row.messageUid || !row.messageUid.startsWith(prefix)) continue;
+          const rest = row.messageUid.slice(prefix.length);
+          const uidNum = parseInt(rest.split(':')[0], 10);
+          if (!isNaN(uidNum)) {
+            processedMsgUidNumbers.add(uidNum);
+          }
+        }
 
-        for await (const msg of client.fetch(range, { uid: true, envelope: true, source: true })) {
-          scannedEmails++;
-          const baseUid = `${folder}:${msg.uid}`;
+        // 2. Blitzschneller Abruf aller vorhandenen E-Mail-UIDs im Ordner (ohne Body/Anhänge < 0.2 Sek.)
+        const allMailboxUids: number[] = [];
+        for await (const meta of client.fetch('1:*', { uid: true })) {
+          if (meta.uid) allMailboxUids.push(meta.uid);
+        }
 
-          if (!msg.source) continue;
-          const parsed = await simpleParser(msg.source);
-          const subject = parsed.subject || msg.envelope?.subject || 'Ohne Betreff';
-          const fromText = parsed.from?.text || '';
-          const emailDate = parsed.date || msg.envelope?.date || new Date();
-          const htmlAsText = parsed.html
-            ? String(parsed.html)
-                .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-                .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-                .replace(/<[^>]+>/g, ' ')
-                .replace(/&nbsp;/gi, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-            : '';
-          const fullBodyText = (parsed.text || '').trim() || htmlAsText;
+        // 3. Nur die noch NIE geprüften UIDs herausfiltern (neueste zuerst)
+        const unseenUids = allMailboxUids
+          .filter((uid) => !processedMsgUidNumbers.has(uid))
+          .sort((a, b) => b - a);
 
-          // Alle PDF-Anhänge dieser E-Mail finden
-          const pdfAttachments = (parsed.attachments || []).filter(
-            (att) =>
-              att.contentType === 'application/pdf' ||
-              (att.filename && att.filename.toLowerCase().endsWith('.pdf'))
-          );
+        const batchSize = Math.min(Number(body.batchSize) || 8, 15);
+        const batchUids = unseenUids.slice(0, batchSize);
+        remainingUnseenCount = Math.max(0, unseenUids.length - batchUids.length);
 
-          // Selbst weitergeleitete Kopien ("Fwd:" / "WG:" vom eigenen Konto ohne eigenes PDF) überspringen,
-          // da die Original-Mail bereits im selben Ordner liegt.
-          const isSelfForward =
-            pdfAttachments.length === 0 &&
-            fromText.toLowerCase().includes(user.toLowerCase()) &&
-            /^(fwd|wg):/i.test(subject.trim());
-          if (isSelfForward) continue;
+        if (batchUids.length > 0) {
+          const uidRange = batchUids.join(',');
+          for await (const msg of client.fetch(uidRange, { uid: true, envelope: true, source: true }, { uid: true })) {
+            scannedEmails++;
+            const baseUid = `${folder}:${msg.uid}`;
 
-          if (pdfAttachments.length > 0) {
-            for (let idx = 0; idx < pdfAttachments.length; idx++) {
-              const att = pdfAttachments[idx];
-              const msgUid = `${baseUid}:att${idx}`;
-              if (existingUidSet.has(msgUid)) continue;
+            if (!msg.source) continue;
+            const parsed = await simpleParser(msg.source);
+            const subject = parsed.subject || msg.envelope?.subject || 'Ohne Betreff';
+            const fromText = parsed.from?.text || '';
+            const emailDate = parsed.date || msg.envelope?.date || new Date();
+            const htmlAsText = parsed.html
+              ? String(parsed.html)
+                  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                  .replace(/<[^>]+>/g, ' ')
+                  .replace(/&nbsp;/gi, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+              : '';
+            const fullBodyText = (parsed.text || '').trim() || htmlAsText;
 
-              const fileName = att.filename || `Rechnung_${msg.uid}_${idx + 1}.pdf`;
-              const analysis = await analyzeInvoiceDocument({
-                pdfBuffer: att.content,
-                fileName,
-                emailSubject: subject,
-                emailFrom: fromText,
-                emailText: fullBodyText,
-              });
+            // Alle PDF-Anhänge dieser E-Mail finden
+            const pdfAttachments = (parsed.attachments || []).filter(
+              (att) =>
+                att.contentType === 'application/pdf' ||
+                (att.filename && att.filename.toLowerCase().endsWith('.pdf'))
+            );
 
-              const created = await prisma.invoice.create({
-                data: {
-                  source: 'GMAIL',
-                  messageUid: msgUid,
+            // Selbst weitergeleitete Kopien ("Fwd:" / "WG:" vom eigenen Konto ohne eigenes PDF) als SKIPPED markieren,
+            // damit sie beim nächsten Sync nicht erneut heruntergeladen werden müssen.
+            const isSelfForward =
+              pdfAttachments.length === 0 &&
+              fromText.toLowerCase().includes(user.toLowerCase()) &&
+              /^(fwd|wg):/i.test(subject.trim());
+
+            if (isSelfForward) {
+              const skipUid = `${baseUid}:skipped`;
+              if (!existingUidSet.has(skipUid)) {
+                await prisma.invoice.create({
+                  data: {
+                    source: 'GMAIL',
+                    messageUid: skipUid,
+                    fileName: 'Weiterleitungs-Kopie (übersprungen)',
+                    emailSubject: subject,
+                    emailFrom: fromText,
+                    emailDate,
+                    status: 'SKIPPED',
+                  },
+                });
+                existingUidSet.add(skipUid);
+              }
+              continue;
+            }
+
+            if (pdfAttachments.length > 0) {
+              for (let idx = 0; idx < pdfAttachments.length; idx++) {
+                const att = pdfAttachments[idx];
+                const msgUid = `${baseUid}:att${idx}`;
+                if (existingUidSet.has(msgUid)) continue;
+
+                const fileName = att.filename || `Rechnung_${msg.uid}_${idx + 1}.pdf`;
+                const analysis = await analyzeInvoiceDocument({
+                  pdfBuffer: att.content,
                   fileName,
                   emailSubject: subject,
                   emailFrom: fromText,
-                  emailDate,
-                  vendorName: analysis.vendorName,
-                  invoiceNumber: analysis.invoiceNumber,
-                  invoiceDate: analysis.invoiceDate ? new Date(analysis.invoiceDate) : emailDate,
-                  grossAmount: analysis.grossAmount,
-                  itemsSummary: analysis.itemsSummary,
-                  paymentMethod: analysis.paymentMethod,
-                  suggestedCategoryId: analysis.suggestedCategoryId,
-                  confidence: analysis.confidence,
-                  status: 'PENDING',
-                },
-              });
-              existingUidSet.add(msgUid);
-              newInvoicesCount++;
+                  emailText: fullBodyText,
+                });
 
-              const matchRes = await matchInvoiceToTransaction(created.id);
-              if (matchRes.matched) {
-                matchedCount++;
-                if (matchRes.autoCategorized) autoCategorizedCount++;
+                const created = await prisma.invoice.create({
+                  data: {
+                    source: 'GMAIL',
+                    messageUid: msgUid,
+                    fileName,
+                    emailSubject: subject,
+                    emailFrom: fromText,
+                    emailDate,
+                    vendorName: analysis.vendorName,
+                    invoiceNumber: analysis.invoiceNumber,
+                    invoiceDate: analysis.invoiceDate ? new Date(analysis.invoiceDate) : emailDate,
+                    grossAmount: analysis.grossAmount,
+                    itemsSummary: analysis.itemsSummary,
+                    paymentMethod: analysis.paymentMethod,
+                    suggestedCategoryId: analysis.suggestedCategoryId,
+                    confidence: analysis.confidence,
+                    status: 'PENDING',
+                  },
+                });
+                existingUidSet.add(msgUid);
+                newInvoicesCount++;
+
+                const matchRes = await matchInvoiceToTransaction(created.id);
+                if (matchRes.matched) {
+                  matchedCount++;
+                  if (matchRes.autoCategorized) autoCategorizedCount++;
+                }
               }
-            }
-          } else {
-            // Reine E-Mail-Rechnung ohne PDF-Anhang (z. B. PayPal-Beleg oder Online-Rechnung im Mailtext)
-            const msgUid = `${baseUid}:body`;
-            if (existingUidSet.has(msgUid)) continue;
+            } else {
+              // Reine E-Mail-Rechnung ohne PDF-Anhang (z. B. PayPal-Beleg oder Online-Rechnung im Mailtext)
+              const msgUid = `${baseUid}:body`;
+              if (existingUidSet.has(msgUid)) continue;
 
-            const bodyText = fullBodyText;
-            if (bodyText.length < 30) continue;
+              const bodyText = fullBodyText;
+              if (bodyText.length < 30) {
+                const skipUid = `${baseUid}:skipped`;
+                if (!existingUidSet.has(skipUid)) {
+                  await prisma.invoice.create({
+                    data: {
+                      source: 'GMAIL',
+                      messageUid: skipUid,
+                      fileName: 'Leere E-Mail (übersprungen)',
+                      emailSubject: subject,
+                      emailFrom: fromText,
+                      emailDate,
+                      status: 'SKIPPED',
+                    },
+                  });
+                  existingUidSet.add(skipUid);
+                }
+                continue;
+              }
 
-            const analysis = await analyzeInvoiceDocument({
-              fileName: `${subject}.eml`,
-              emailSubject: subject,
-              emailFrom: fromText,
-              emailText: bodyText,
-            });
-
-            // Nur speichern, wenn ein Rechnungsbetrag erkannt wurde
-            if (analysis.grossAmount && analysis.grossAmount > 0) {
-              const created = await prisma.invoice.create({
-                data: {
-                  source: 'GMAIL',
-                  messageUid: msgUid,
-                  fileName: `${subject.slice(0, 60)} (E-Mail)`,
-                  emailSubject: subject,
-                  emailFrom: fromText,
-                  emailDate,
-                  vendorName: analysis.vendorName,
-                  invoiceNumber: analysis.invoiceNumber,
-                  invoiceDate: analysis.invoiceDate ? new Date(analysis.invoiceDate) : emailDate,
-                  grossAmount: analysis.grossAmount,
-                  itemsSummary: analysis.itemsSummary,
-                  paymentMethod: analysis.paymentMethod,
-                  suggestedCategoryId: analysis.suggestedCategoryId,
-                  confidence: analysis.confidence,
-                  status: 'PENDING',
-                },
+              const analysis = await analyzeInvoiceDocument({
+                fileName: `${subject}.eml`,
+                emailSubject: subject,
+                emailFrom: fromText,
+                emailText: bodyText,
               });
-              existingUidSet.add(msgUid);
-              newInvoicesCount++;
 
-              const matchRes = await matchInvoiceToTransaction(created.id);
-              if (matchRes.matched) {
-                matchedCount++;
-                if (matchRes.autoCategorized) autoCategorizedCount++;
+              // Nur als Rechnung speichern, wenn ein Rechnungsbetrag erkannt wurde; sonst als SKIPPED markieren
+              if (analysis.grossAmount && analysis.grossAmount > 0) {
+                const created = await prisma.invoice.create({
+                  data: {
+                    source: 'GMAIL',
+                    messageUid: msgUid,
+                    fileName: `${subject.slice(0, 60)} (E-Mail)`,
+                    emailSubject: subject,
+                    emailFrom: fromText,
+                    emailDate,
+                    vendorName: analysis.vendorName,
+                    invoiceNumber: analysis.invoiceNumber,
+                    invoiceDate: analysis.invoiceDate ? new Date(analysis.invoiceDate) : emailDate,
+                    grossAmount: analysis.grossAmount,
+                    itemsSummary: analysis.itemsSummary,
+                    paymentMethod: analysis.paymentMethod,
+                    suggestedCategoryId: analysis.suggestedCategoryId,
+                    confidence: analysis.confidence,
+                    status: 'PENDING',
+                  },
+                });
+                existingUidSet.add(msgUid);
+                newInvoicesCount++;
+
+                const matchRes = await matchInvoiceToTransaction(created.id);
+                if (matchRes.matched) {
+                  matchedCount++;
+                  if (matchRes.autoCategorized) autoCategorizedCount++;
+                }
+              } else {
+                const skipUid = `${baseUid}:skipped`;
+                if (!existingUidSet.has(skipUid)) {
+                  await prisma.invoice.create({
+                    data: {
+                      source: 'GMAIL',
+                      messageUid: skipUid,
+                      fileName: 'Kein Rechnungsbetrag erkannt (übersprungen)',
+                      emailSubject: subject,
+                      emailFrom: fromText,
+                      emailDate,
+                      status: 'SKIPPED',
+                    },
+                  });
+                  existingUidSet.add(skipUid);
+                }
               }
             }
           }
@@ -235,6 +315,8 @@ export async function POST(req: NextRequest) {
       newInvoicesCount,
       matchedCount,
       autoCategorizedCount,
+      remainingUnseenCount,
+      totalFolderEmails,
     });
   } catch (error: any) {
     if (client) {

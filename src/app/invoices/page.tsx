@@ -175,23 +175,62 @@ export default function InvoicesPage() {
     setSyncingGmail(true);
     setStatusMsg({
       type: 'info',
-      text: '🔄 Verbinde mit Gmail-Ordner, lese neue Rechnungen per KI aus und gleiche Beträge mit Bankumsätzen ab...',
+      text: '🔄 Verbinde mit Gmail-Ordner, prüfe alle noch nicht gelesenen E-Mails und analysiere Rechnungen per KI...',
     });
+
+    let totalScanned = 0;
+    let totalNewInvoices = 0;
+    let totalMatched = 0;
+    let totalAutoCategorized = 0;
+
     try {
-      const res = await fetch('/api/invoices/sync-gmail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxMessages: 30 }),
-      });
-      const data = await res.json();
-      if (data.success) {
+      let hasMore = true;
+      let safetyLoops = 0;
+
+      while (hasMore && safetyLoops < 30) {
+        safetyLoops++;
+        const res = await fetch('/api/invoices/sync-gmail', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ batchSize: 8 }),
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+          setStatusMsg({ type: 'error', text: `❌ ${data.error}` });
+          return;
+        }
+
+        totalScanned += data.scannedEmails || 0;
+        totalNewInvoices += data.newInvoicesCount || 0;
+        totalMatched += data.matchedCount || 0;
+        totalAutoCategorized += data.autoCategorizedCount || 0;
+
+        // Tabelle nach jedem Paket live aktualisieren
+        fetchAll(true);
+
+        const remaining = Number(data.remainingUnseenCount || 0);
+        if (remaining > 0 && (data.scannedEmails || 0) > 0) {
+          setStatusMsg({
+            type: 'info',
+            text: `🔄 Lade alle Rechnungen aus Gmail... (${totalScanned} geprüft, ${totalNewInvoices} Rechnung(en) erkannt – noch ${remaining} E-Mail(s) im Ordner offen...)`,
+          });
+          hasMore = true;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      if (totalScanned === 0) {
         setStatusMsg({
           type: 'success',
-          text: `✅ Gmail-Sync abgeschlossen (${data.scannedEmails} Mails geprüft): ${data.newInvoicesCount} neue Rechnung(en) erkannt, ${data.matchedCount} direkt einem Bankumsatz zugeordnet (${data.autoCategorizedCount} automatisch kategorisiert)!`,
+          text: '✅ Ihr Gmail-Ordner ist bereits komplett synchronisiert – keine neuen ungelesenen E-Mails vorhanden!',
         });
-        fetchAll(true);
       } else {
-        setStatusMsg({ type: 'error', text: `❌ ${data.error}` });
+        setStatusMsg({
+          type: 'success',
+          text: `✅ Gmail-Sync komplett abgeschlossen (${totalScanned} neue Mails geprüft): ${totalNewInvoices} neue Rechnung(en) geladen, ${totalMatched} direkt einem offenen Bankumsatz zugeordnet (${totalAutoCategorized} automatisch kategorisiert)!`,
+        });
       }
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: `❌ Fehler beim Gmail-Abruf: ${err.message}` });
