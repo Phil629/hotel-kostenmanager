@@ -18,6 +18,7 @@ model Category {
   rules        Rule[]
   transactions Transaction[]
   budgets      Budget[]
+  invoices     Invoice[]
   createdAt    DateTime      @default(now())
 }
 
@@ -45,8 +46,32 @@ model Transaction {
   category      Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   matchedRuleId String?
   matchedRule   Rule?     @relation(fields: [matchedRuleId], references: [id], onDelete: SetNull)
+  invoice       Invoice?
   rawHash       String    @unique
   createdAt     DateTime  @default(now())
+}
+
+model Invoice {
+  id                   String       @id @default(uuid())
+  source               String       @default("GMAIL") // "GMAIL" | "UPLOAD"
+  messageUid           String?      @unique
+  fileName             String
+  emailSubject         String?
+  emailFrom            String?
+  emailDate            DateTime?
+  vendorName           String?
+  invoiceNumber        String?
+  invoiceDate          DateTime?
+  grossAmount          Float?
+  itemsSummary         String?
+  paymentMethod        String?
+  suggestedCategoryId  String?
+  suggestedCategory    Category?    @relation(fields: [suggestedCategoryId], references: [id], onDelete: SetNull)
+  matchedTransactionId String?      @unique
+  matchedTransaction   Transaction? @relation(fields: [matchedTransactionId], references: [id], onDelete: SetNull)
+  status               String       @default("PENDING") // "MATCHED" | "PENDING" | "IGNORED"
+  confidence           Float        @default(0.9)
+  createdAt            DateTime     @default(now())
 }
 
 model Budget {
@@ -61,11 +86,16 @@ model Budget {
 }
 
 model Settings {
-  id              String   @id @default("default")
-  telegramToken   String?
-  telegramChatId  String?
-  emailAddress    String?
-  hotelName       String   @default("Parkhotel & Restaurant")
-  autoSendReports Boolean  @default(true)
-  updatedAt       DateTime @updatedAt
+  id               String    @id @default("default")
+  telegramToken    String?
+  telegramChatId   String?
+  emailAddress     String?
+  hotelName        String    @default("Parkhotel & Restaurant")
+  autoSendReports  Boolean   @default(true)
+  geminiApiKey     String?
+  gmailUser        String?
+  gmailAppPassword String?
+  gmailFolder      String    @default("INBOX")
+  lastGmailSyncAt  DateTime?
+  updatedAt        DateTime  @updatedAt
 }

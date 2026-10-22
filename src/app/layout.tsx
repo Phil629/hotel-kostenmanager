@@ -42,6 +42,12 @@ export default function RootLayout({
                 💳 Umsätze & Import
               </Link>
               <Link
+                href="/invoices"
+                className="px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5"
+              >
+                📄 Rechnungs-KI
+              </Link>
+              <Link
                 href="/categories"
                 className="px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors flex items-center gap-1.5"
               >

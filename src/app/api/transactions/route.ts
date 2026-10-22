@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '../../../lib/prisma';
 import { matchTransaction } from '../../../lib/categorizer';
 import { parseCSVContent, parseCAMT053Content } from '../../../lib/parsers';
+import { matchAllPendingInvoices } from '../../../lib/invoiceMatcher';
 
 export const revalidate = 0;
 export const dynamic = 'force-dynamic';
@@ -222,11 +223,16 @@ export async function POST(req: NextRequest) {
     }
     importedCount = newTransactionsData.length;
 
+    // 4. Bereits vorliegende Rechnungen aus dem Gmail-Ordner mit den neuen Bankumsätzen abgleichen
+    const invoiceMatch = await matchAllPendingInvoices();
+    autoCategorizedCount += invoiceMatch.autoCategorizedCount;
+
     return NextResponse.json({
       success: true,
       importedCount,
       skippedCount,
       autoCategorizedCount,
+      invoiceMatchedCount: invoiceMatch.matchedCount,
     });
   } catch (error: any) {
     console.error('Error importing transactions:', error);

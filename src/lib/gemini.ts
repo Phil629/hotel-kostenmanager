@@ -1,3 +1,5 @@
+import { getActiveGeminiApiKey } from './invoiceMatcher';
+
 export interface GeminiSuggestionResult {
   suggestedCategoryId: string | null;
   suggestedCategoryName: string | null;
@@ -21,7 +23,7 @@ export async function suggestCategoryWithGemini(
   tx: TransactionInfo,
   categories: CategoryInfo[]
 ): Promise<GeminiSuggestionResult> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = await getActiveGeminiApiKey();
 
   const categoriesPrompt = categories
     .map((c) => `- ID: "${c.id}", Name: "${c.name}"${c.description ? ` (${c.description})` : ''}`)
@@ -46,7 +48,6 @@ Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
 }`;
 
   if (!apiKey) {
-    // Intelligent heuristic fallback when GEMINI_API_KEY is not set yet
     const descLower = tx.description.toLowerCase();
     const payeeLower = (tx.payee || '').toLowerCase();
 
@@ -56,7 +57,7 @@ Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
         return {
           suggestedCategoryId: cat.id,
           suggestedCategoryName: cat.name,
-          confidenceScore: 0.90,
+          confidenceScore: 0.9,
           reasoning: 'Simulation ohne API-Key: Stichwörter für Getränke im Verwendungszweck erkannt.',
         };
       }
@@ -70,19 +71,18 @@ Antworte AUSSCHLIESSLICH in folgendem JSON-Format (kein Markdown block):
       }
     }
 
-    // Default first non-other category
     const fallbackCat = categories[0];
     return {
       suggestedCategoryId: fallbackCat?.id || null,
       suggestedCategoryName: fallbackCat?.name || null,
-      confidenceScore: 0.70,
-      reasoning: 'Simulierter Vorschlag (Setzen Sie GEMINI_API_KEY in der .env Datei für echte Gemini KI Analysen).',
+      confidenceScore: 0.7,
+      reasoning: 'Simulierter Vorschlag (Hinterlegen Sie unter "Rechnungs-KI" Ihren kostenlosen Gemini API-Key für echte KI-Analysen).',
     };
   }
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
