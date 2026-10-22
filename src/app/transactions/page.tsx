@@ -1,6 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { usePersistentState } from '../../lib/usePersistentState';
+
+type SortOption = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 
 interface Category {
   id: string;
@@ -41,10 +44,15 @@ export default function TransactionsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
-  // Filters
-  const [selectedMonth, setSelectedMonth] = useState<string>('all');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  // Filters (werden seitenübergreifend gemerkt; Monat wird mit dem Dashboard geteilt)
+  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
+  const [selectedCategory, setSelectedCategory, categoryReady] = usePersistentState<string>('transactions.category', 'all');
+  const [searchQuery, setSearchQuery, searchReady] = usePersistentState<string>('transactions.search', '');
+  const [sortBy, setSortBy] = usePersistentState<SortOption>('transactions.sort', 'date_desc');
+  const filtersReady = monthReady && categoryReady && searchReady;
+
+  // Bearbeitete Buchungen bleiben bis zum nächsten Filterwechsel sichtbar (kein "Wegspringen")
+  const stickyIdsRef = useRef<Set<string>>(new Set());
 
   // Bulk Selection State
   const [selectedTxIds, setSelectedTxIds] = useState<Set<string>>(new Set());
@@ -97,7 +105,17 @@ export default function TransactionsPage() {
 
       const res = await fetch(`/api/transactions?${params.toString()}`);
       const data = await res.json();
-      setTransactions(data.transactions || []);
+      const fetched: Transaction[] = data.transactions || [];
+      if (silent) {
+        // Bereits bearbeitete Buchungen, die nicht mehr zum Filter passen, sichtbar lassen
+        setTransactions((prev) => {
+          const fetchedIds = new Set(fetched.map((t) => t.id));
+          const kept = prev.filter((t) => stickyIdsRef.current.has(t.id) && !fetchedIds.has(t.id));
+          return [...fetched, ...kept];
+        });
+      } else {
+        setTransactions(fetched);
+      }
       if (data.availableMonths) {
         setAvailableMonths(data.availableMonths);
       }
@@ -113,9 +131,53 @@ export default function TransactionsPage() {
   }, []);
 
   useEffect(() => {
+    if (!filtersReady) return; // erst laden, wenn gemerkte Filter bekannt sind
+    stickyIdsRef.current = new Set();
     fetchTransactions(false);
     setSelectedTxIds(new Set());
-  }, [selectedMonth, selectedCategory, searchQuery]);
+  }, [selectedMonth, selectedCategory, searchQuery, filtersReady]);
+
+  // Passt eine (bearbeitete) Buchung noch zum aktiven Kategorie-Filter?
+  const matchesCategoryFilter = (tx: Transaction) => {
+    if (selectedCategory === 'all') return true;
+    if (selectedCategory === 'uncategorized') return !tx.category;
+    return tx.category?.id === selectedCategory;
+  };
+
+  const doneCount = transactions.filter((t) => stickyIdsRef.current.has(t.id) && !matchesCategoryFilter(t)).length;
+
+  const hideDoneTransactions = () => {
+    setTransactions((prev) => prev.filter((t) => matchesCategoryFilter(t)));
+    stickyIdsRef.current = new Set();
+  };
+
+  // Clientseitige Sortierung (Datum oder Betrag)
+  const sortedTransactions = useMemo(() => {
+    const list = [...transactions];
+    const byDate = (a: Transaction, b: Transaction) => new Date(a.date).getTime() - new Date(b.date).getTime();
+    const byAmount = (a: Transaction, b: Transaction) => Math.abs(a.amount) - Math.abs(b.amount);
+    switch (sortBy) {
+      case 'date_asc':
+        return list.sort((a, b) => byDate(a, b) || a.id.localeCompare(b.id));
+      case 'amount_desc':
+        return list.sort((a, b) => byAmount(b, a) || byDate(b, a));
+      case 'amount_asc':
+        return list.sort((a, b) => byAmount(a, b) || byDate(b, a));
+      case 'date_desc':
+      default:
+        return list.sort((a, b) => byDate(b, a) || b.id.localeCompare(a.id));
+    }
+  }, [transactions, sortBy]);
+
+  const toggleSort = (column: 'date' | 'amount') => {
+    if (column === 'date') setSortBy(sortBy === 'date_desc' ? 'date_asc' : 'date_desc');
+    else setSortBy(sortBy === 'amount_desc' ? 'amount_asc' : 'amount_desc');
+  };
+
+  const sortIndicator = (column: 'date' | 'amount') => {
+    if (!sortBy.startsWith(column)) return <span className="text-slate-300">↕</span>;
+    return <span className="text-blue-600">{sortBy.endsWith('desc') ? '↓' : '↑'}</span>;
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -207,6 +269,16 @@ export default function TransactionsPage() {
       const data = await res.json();
       if (data.success) {
         setToastMessage(`⚡ ${data.count} Umsätze auf "${data.categoryName}" umgestellt!`);
+        // Sofort lokal übernehmen; Zeilen bleiben an ihrer Stelle stehen
+        ids.forEach((id) => stickyIdsRef.current.add(id));
+        const newCat = categories.find((c) => c.id === bulkCatId) || null;
+        setTransactions((prev) =>
+          prev.map((t) =>
+            selectedTxIds.has(t.id)
+              ? { ...t, category: newCat, status: newCat ? 'CATEGORIZED' : 'UNCATEGORIZED', matchedRule: null }
+              : t
+          )
+        );
         setSelectedTxIds(new Set());
         fetchTransactions(true);
       }
@@ -226,6 +298,9 @@ export default function TransactionsPage() {
   ) => {
     const targetTx = transactions.find((t) => t.id === txId);
     const oldCatId = targetTx?.category?.id || null;
+
+    // Buchung bleibt sichtbar, auch wenn sie nicht mehr zum Kategorie-Filter passt
+    stickyIdsRef.current.add(txId);
 
     setTransactions((prev) =>
       prev.map((t) => {
@@ -272,7 +347,22 @@ export default function TransactionsPage() {
 
         setActiveTx(null);
         setAiResult(null);
-        fetchTransactions(true);
+
+        // Serverstand der Buchung übernehmen (ohne die ganze Liste neu zu laden)
+        if (data.transaction) {
+          setTransactions((prev) =>
+            prev.map((t) =>
+              t.id === txId
+                ? { ...t, category: data.transaction.category || null, status: data.transaction.status, matchedRule: data.transaction.matchedRule || null }
+                : t
+            )
+          );
+        }
+
+        // Nur neu laden, wenn sich auch andere Buchungen geändert haben können (Lernregel angelegt/gelöscht)
+        if (data.learnResult?.ruleCreated || data.ruleDeleted) {
+          fetchTransactions(true);
+        }
       }
     } catch (e) {
       console.error(e);
@@ -332,6 +422,7 @@ export default function TransactionsPage() {
 
       const data = await res.json();
       if (data.success) {
+        updateTransactionIds.forEach((id) => stickyIdsRef.current.add(id));
         setToastMessage(`✅ Regel "${editingRuleFromTx.pattern}" aktualisiert & ${data.updatedTxCount} Buchungen umgestellt!`);
         setEditingRuleFromTx(null);
         fetchTransactions(true);
@@ -492,14 +583,45 @@ export default function TransactionsPage() {
               ))}
             </select>
           </div>
+
+          {/* Sort Selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 font-semibold">Sortierung:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortOption)}
+              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="date_desc">📅 Datum (neueste zuerst)</option>
+              <option value="date_asc">📅 Datum (älteste zuerst)</option>
+              <option value="amount_desc">💰 Umsatzgröße (größte zuerst)</option>
+              <option value="amount_asc">💰 Umsatzgröße (kleinste zuerst)</option>
+            </select>
+          </div>
         </div>
       </div>
+
+      {/* Info-Leiste für erledigte, aber bewusst eingeblendet gelassene Buchungen */}
+      {doneCount > 0 && (
+        <div className="px-4 py-2.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs flex items-center justify-between">
+          <span>
+            📌 <b>{doneCount}</b> bereits neu zugeordnete Buchung{doneCount === 1 ? ' bleibt' : 'en bleiben'} zur Orientierung an Ort und Stelle sichtbar (kein Wegspringen).
+          </span>
+          <button
+            type="button"
+            onClick={hideDoneTransactions}
+            className="px-3 py-1 bg-white hover:bg-slate-200 text-slate-700 font-semibold rounded-lg border border-slate-300 transition cursor-pointer"
+          >
+            Erledigte ausblenden
+          </button>
+        </div>
+      )}
 
       {/* Transactions Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-slate-400 text-sm">Lade Umsätze...</div>
-        ) : transactions.length === 0 ? (
+        ) : sortedTransactions.length === 0 ? (
           <div className="p-12 text-center text-slate-500 text-sm">Keine passenden Umsätze für diese Filter gefunden.</div>
         ) : (
           <div className="overflow-x-auto">
@@ -509,28 +631,53 @@ export default function TransactionsPage() {
                   <th className="px-4 py-3 w-10 text-center">
                     <input
                       type="checkbox"
-                      checked={selectedTxIds.size > 0 && selectedTxIds.size === transactions.length}
+                      checked={selectedTxIds.size > 0 && selectedTxIds.size === sortedTransactions.length}
                       onChange={toggleSelectAllVisible}
                       className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
                       title="Alle angezeigten Buchungen auswählen"
                     />
                   </th>
-                  <th className="px-5 py-3">Datum</th>
+                  <th className="px-5 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('date')}
+                      className="inline-flex items-center gap-1 hover:text-slate-900 cursor-pointer uppercase font-semibold tracking-wider"
+                      title="Nach Datum sortieren"
+                    >
+                      <span>Datum</span>
+                      {sortIndicator('date')}
+                    </button>
+                  </th>
                   <th className="px-6 py-3">Empfänger & Auto-Regel</th>
                   <th className="px-6 py-3">Verwendungszweck</th>
-                  <th className="px-6 py-3">Betrag</th>
+                  <th className="px-6 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort('amount')}
+                      className="inline-flex items-center gap-1 hover:text-slate-900 cursor-pointer uppercase font-semibold tracking-wider"
+                      title="Nach Umsatzgröße sortieren"
+                    >
+                      <span>Betrag</span>
+                      {sortIndicator('amount')}
+                    </button>
+                  </th>
                   <th className="px-6 py-3">Kategorie (Einzel-Zuordnung)</th>
                   <th className="px-6 py-3 text-right">Aktionen & KI</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {transactions.map((tx) => {
+                {sortedTransactions.map((tx) => {
                   const isChecked = selectedTxIds.has(tx.id);
+                  const isDoneHere = stickyIdsRef.current.has(tx.id) && !matchesCategoryFilter(tx);
                   return (
                     <tr
                       key={tx.id}
                       className={`transition ${
-                        isChecked ? 'bg-blue-50/60 border-l-4 border-blue-500' : 'hover:bg-slate-50/80'
+                        isChecked
+                          ? 'bg-blue-50/60 border-l-4 border-blue-500'
+                          : isDoneHere
+                          ? 'bg-emerald-50/50 border-l-4 border-emerald-400 opacity-75'
+                          : 'hover:bg-slate-50/80'
                       }`}
                     >
                       <td className="px-4 py-4 text-center">

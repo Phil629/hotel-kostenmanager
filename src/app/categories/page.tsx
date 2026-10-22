@@ -1,6 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { usePersistentState } from '../../lib/usePersistentState';
+
+type CategorySortOption = 'amount_desc' | 'amount_asc' | 'count_desc' | 'name_asc';
 
 interface Category {
   id: string;
@@ -8,6 +11,7 @@ interface Category {
   color: string;
   description: string | null;
   isHotelCore: boolean;
+  totalAmount?: number;
   _count?: {
     transactions: number;
     rules: number;
@@ -38,8 +42,11 @@ export default function CategoriesPage() {
   const [editDescription, setEditDescription] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const fetchCategories = async () => {
-    setLoading(true);
+  // Sortierung (wird sitzungsübergreifend gemerkt)
+  const [sortBy, setSortBy] = usePersistentState<CategorySortOption>('categories.sort', 'amount_desc');
+
+  const fetchCategories = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await fetch('/api/categories');
       const data = await res.json();
@@ -47,8 +54,27 @@ export default function CategoriesPage() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
+  };
+
+  const sortedCategories = useMemo(() => {
+    const list = [...categories];
+    switch (sortBy) {
+      case 'amount_asc':
+        return list.sort((a, b) => (a.totalAmount || 0) - (b.totalAmount || 0));
+      case 'count_desc':
+        return list.sort((a, b) => (b._count?.transactions || 0) - (a._count?.transactions || 0));
+      case 'name_asc':
+        return list.sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      case 'amount_desc':
+      default:
+        return list.sort((a, b) => (b.totalAmount || 0) - (a.totalAmount || 0));
+    }
+  }, [categories, sortBy]);
+
+  const formatEuro = (num: number) => {
+    return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
   };
 
   useEffect(() => {
@@ -73,7 +99,7 @@ export default function CategoriesPage() {
         setMsg(`✅ Kategorie "${name}" erfolgreich erstellt!`);
         setName('');
         setDescription('');
-        fetchCategories();
+        fetchCategories(true);
       } else {
         setMsg(`❌ Fehler: ${data.error}`);
       }
@@ -106,7 +132,7 @@ export default function CategoriesPage() {
       if (data.success) {
         setMsg(`✅ Kategorie "${editName}" erfolgreich aktualisiert!`);
         setEditingCategory(null);
-        fetchCategories();
+        fetchCategories(true);
       } else {
         setMsg(`❌ Fehler beim Speichern: ${data.error}`);
       }
@@ -125,7 +151,7 @@ export default function CategoriesPage() {
       const data = await res.json();
       if (data.success) {
         setMsg(`Kategorie "${catName}" gelöscht.`);
-        fetchCategories();
+        fetchCategories(true);
       } else {
         setMsg(`❌ Fehler beim Löschen: ${data.error}`);
       }
@@ -221,15 +247,28 @@ export default function CategoriesPage() {
 
       {/* Categories List */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="text-lg font-bold text-slate-900">Alle Kategorien ({categories.length})</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 font-semibold">Sortierung:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as CategorySortOption)}
+              className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="amount_desc">💰 Umsatzgröße (größte zuerst)</option>
+              <option value="amount_asc">💰 Umsatzgröße (kleinste zuerst)</option>
+              <option value="count_desc">🔢 Anzahl Buchungen</option>
+              <option value="name_asc">🔤 Alphabetisch (A–Z)</option>
+            </select>
+          </div>
         </div>
 
         {loading ? (
           <div className="p-12 text-center text-slate-400 text-sm">Lade Kategorien...</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {categories.map((cat) => (
+            {sortedCategories.map((cat) => (
               <div key={cat.id} className="p-5 flex items-center justify-between hover:bg-slate-50/80 transition">
                 <div className="flex items-center gap-4 w-2/3">
                   <span className="w-5 h-5 rounded-full shrink-0 shadow-xs" style={{ backgroundColor: cat.color }} />
@@ -254,8 +293,10 @@ export default function CategoriesPage() {
 
                 <div className="flex items-center gap-6">
                   <div className="text-right text-xs text-slate-500">
-                    <span className="font-bold text-slate-900 block text-sm">{cat._count?.transactions || 0}</span>
-                    <span>Buchungen</span>
+                    <span className="font-bold text-slate-900 block text-sm tabular-nums">
+                      {formatEuro(cat.totalAmount || 0)}
+                    </span>
+                    <span>{cat._count?.transactions || 0} Buchungen</span>
                   </div>
 
                   <div className="flex items-center gap-2">

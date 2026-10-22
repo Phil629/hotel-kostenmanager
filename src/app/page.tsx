@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { usePersistentState } from '../lib/usePersistentState';
 import Link from 'next/link';
 import {
   PieChart,
@@ -60,17 +61,45 @@ interface StatsResponse {
   availableYears: string[];
 }
 
+interface MovedTxInfo {
+  tx: TransactionItem;
+  // Kategorie, in der die Buchung ursprünglich stand (dort bleibt sie als Platzhalter sichtbar)
+  originCat: { id: string; name: string; color: string };
+  // Aktuelle neue Kategorie
+  toCatId: string;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
 export default function Dashboard() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedMonth, setSelectedMonth] = useState<string>('all');
-  
-  // Accordion state for expanded categories
-  const [expandedCatIds, setExpandedCatIds] = useState<Set<string>>(new Set());
 
-  // Filter state for hierarchical Year/Month selector
-  const [activeFilterYear, setActiveFilterYear] = useState<string>('all');
+  // Zeitraum wird seitenübergreifend gemerkt (gleicher Schlüssel wie auf der Umsätze-Seite)
+  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
+
+  // Aufgeklappte Kategorien werden ebenfalls gemerkt
+  const [expandedCatList, setExpandedCatList] = usePersistentState<string[]>('dashboard.expandedCats', []);
+  const expandedCatIds = useMemo(() => new Set(expandedCatList), [expandedCatList]);
+
+  // Sortierung der Einzelbuchungen innerhalb aufgeklappter Kategorien
+  const [txSortBy, setTxSortBy] = usePersistentState<'amount_desc' | 'amount_asc' | 'date_desc' | 'date_asc'>(
+    'dashboard.txSort',
+    'amount_desc'
+  );
+
+  // Eingefrorene Reihenfolge der Kategorien: Beim Umbuchen springt nichts mehr hin und her.
+  const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+
+  // Umgebuchte Buchungen bleiben in ihrer alten Kategorie als Platzhalter stehen (mit "Rückgängig")
+  const [movedTx, setMovedTx] = useState<Record<string, MovedTxInfo>>({});
+
+  // Anzahl laufender Umbuchungs-Requests (Refresh erst, wenn alle fertig sind)
+  const pendingRequests = useRef(0);
+
+  // Jahr ergibt sich direkt aus dem gewählten Zeitraum
+  const activeFilterYear = selectedMonth === 'all' ? 'all' : selectedMonth.slice(0, 4);
 
   const shortGermanMonths: Record<string, string> = {
     '01': 'Januar',
@@ -147,53 +176,8 @@ export default function Dashboard() {
 
   const shortMonthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
 
-  const getChronologicalMonths = () => {
-    if (!data?.availableMonths) return [];
-    return data.availableMonths
-      .filter((m) => m.value.includes('-'))
-      .map((m) => m.value)
-      .sort(); // ['2023-01', ..., '2026-08']
-  };
-
-  const handlePrevMonth = () => {
-    const months = getChronologicalMonths();
-    if (months.length === 0) return;
-    const currentIdx = months.indexOf(selectedMonth);
-    if (currentIdx > 0) {
-      const prev = months[currentIdx - 1];
-      setSelectedMonth(prev);
-      setActiveFilterYear(prev.split('-')[0]);
-    } else if (currentIdx === -1) {
-      const latest = months[months.length - 1];
-      setSelectedMonth(latest);
-      setActiveFilterYear(latest.split('-')[0]);
-    }
-  };
-
-  const handleNextMonth = () => {
-    const months = getChronologicalMonths();
-    if (months.length === 0) return;
-    const currentIdx = months.indexOf(selectedMonth);
-    if (currentIdx !== -1 && currentIdx < months.length - 1) {
-      const next = months[currentIdx + 1];
-      setSelectedMonth(next);
-      setActiveFilterYear(next.split('-')[0]);
-    } else if (currentIdx === -1) {
-      const first = months[0];
-      setSelectedMonth(first);
-      setActiveFilterYear(first.split('-')[0]);
-    }
-  };
-
   const handleSelectMonthDirect = (val: string) => {
     setSelectedMonth(val);
-    if (val === 'all') {
-      setActiveFilterYear('all');
-    } else if (val.includes('-')) {
-      setActiveFilterYear(val.split('-')[0]);
-    } else {
-      setActiveFilterYear(val);
-    }
   };
 
   const yearAverages = getYearAverages();
@@ -214,8 +198,20 @@ export default function Dashboard() {
       const res = await fetch(`/api/stats?month=${monthVal}&_t=${Date.now()}`, {
         cache: 'no-store',
       });
-      const json = await res.json();
+      const json: StatsResponse = await res.json();
+      // Während noch Umbuchungen laufen, keine (veralteten) Daten übernehmen
+      if (silent && pendingRequests.current > 0) return;
       setData(json);
+
+      const freshIds = (json.pieChartData || []).map((c) => c.id);
+      if (!silent) {
+        // Neuer Zeitraum: Reihenfolge nach Betrag neu festlegen, Platzhalter verwerfen
+        setCategoryOrder(freshIds);
+        setMovedTx({});
+      } else {
+        // Hintergrund-Aktualisierung: Reihenfolge beibehalten, neue Kategorien hinten anhängen
+        setCategoryOrder((prev) => [...prev, ...freshIds.filter((id) => !prev.includes(id))]);
+      }
     } catch (e) {
       console.error('Error fetching stats:', e);
     } finally {
@@ -224,6 +220,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    if (!monthReady) return; // erst laden, wenn der gemerkte Zeitraum bekannt ist
     fetchStats(selectedMonth);
     fetchCategories();
 
@@ -231,37 +228,127 @@ export default function Dashboard() {
     const handleFocus = () => fetchStats(selectedMonth, true);
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [selectedMonth]);
+  }, [selectedMonth, monthReady]);
 
   const toggleCategoryExpand = (catId: string) => {
-    setExpandedCatIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(catId)) {
-        next.delete(catId);
-      } else {
-        next.add(catId);
+    const isOpen = expandedCatList.includes(catId);
+    setExpandedCatList((prev) => (isOpen ? prev.filter((id) => id !== catId) : [...prev, catId]));
+    if (isOpen) {
+      // Beim Zuklappen die Platzhalter dieser Kategorie aufräumen
+      setMovedTx((prev) => {
+        const next: Record<string, MovedTxInfo> = {};
+        for (const [id, info] of Object.entries(prev)) {
+          if (info.originCat.id !== catId) next[id] = info;
+        }
+        return next;
+      });
+    }
+  };
+
+  // Buchung lokal (sofort) von einer Kategorie in eine andere verschieben – ohne Neuladen
+  const moveTxLocally = (prev: StatsResponse, txId: string, toCatId: string): StatsResponse => {
+    let fromCatId: string | null = null;
+    let movedItem: TransactionItem | null = null;
+    for (const c of prev.pieChartData) {
+      const found = c.transactions.find((t) => t.id === txId);
+      if (found) {
+        fromCatId = c.id;
+        movedItem = found;
+        break;
       }
-      return next;
-    });
+    }
+    if (!movedItem || fromCatId === null || fromCatId === toCatId) return prev;
+
+    const abs = Math.abs(movedItem.amount);
+    const updatedTx: TransactionItem = {
+      ...movedItem,
+      categoryId: toCatId === 'uncategorized' ? null : toCatId,
+    };
+
+    let pie = prev.pieChartData.map((c) =>
+      c.id === fromCatId
+        ? {
+            ...c,
+            transactions: c.transactions.filter((t) => t.id !== txId),
+            amount: round2(c.amount - abs),
+            count: c.count - 1,
+          }
+        : c
+    );
+
+    if (pie.some((c) => c.id === toCatId)) {
+      pie = pie.map((c) =>
+        c.id === toCatId
+          ? { ...c, transactions: [...c.transactions, updatedTx], amount: round2(c.amount + abs), count: c.count + 1 }
+          : c
+      );
+    } else {
+      const meta = categories.find((c) => c.id === toCatId);
+      pie.push({
+        id: toCatId,
+        name: meta?.name || 'Unkategorisiert',
+        color: meta?.color || '#94a3b8',
+        amount: round2(abs),
+        count: 1,
+        percentage: 0,
+        transactions: [updatedTx],
+      });
+    }
+
+    const total = prev.summary.totalExpense;
+    pie = pie
+      .filter((c) => c.count > 0)
+      .map((c) => ({ ...c, percentage: total > 0 ? Math.round((c.amount / total) * 1000) / 10 : 0 }));
+
+    const uncategorizedAmount = pie.find((c) => c.id === 'uncategorized')?.amount || 0;
+
+    return { ...prev, pieChartData: pie, summary: { ...prev.summary, uncategorizedAmount } };
   };
 
   const handleRecategorizeTransaction = async (txId: string, newCategoryId: string) => {
     if (!data) return;
 
-    // Find current category and transaction name for toast
-    let txName = 'Buchung';
+    // Aktuelle Kategorie + Buchung finden
+    let currentCat: PieCategoryData | null = null;
+    let currentTx: TransactionItem | null = null;
     for (const cat of data.pieChartData) {
       const found = cat.transactions.find((t) => t.id === txId);
       if (found) {
-        txName = found.payee || found.description.substring(0, 20);
+        currentCat = cat;
+        currentTx = found;
         break;
       }
     }
+    if (!currentCat || !currentTx || currentCat.id === newCategoryId) return;
 
-    setToastMsg(`✅ ${txName} neu zugeordnet!`);
+    // Platzhalter in der Ursprungskategorie pflegen
+    const fromCat = currentCat;
+    const fromTx = currentTx;
+    setMovedTx((prev) => {
+      const existing = prev[txId];
+      const origin = existing ? existing.originCat : { id: fromCat.id, name: fromCat.name, color: fromCat.color };
+      const next = { ...prev };
+      if (origin.id === newCategoryId) {
+        delete next[txId]; // zurück an den Ursprung -> kein Platzhalter mehr nötig
+      } else {
+        next[txId] = { tx: fromTx, originCat: origin, toCatId: newCategoryId };
+      }
+      return next;
+    });
 
+    // Sofortige lokale Aktualisierung (kein Ladeflackern, Reihenfolge bleibt)
+    setData((prev) => (prev ? moveTxLocally(prev, txId, newCategoryId) : prev));
+    setCategoryOrder((prev) => (prev.includes(newCategoryId) ? prev : [...prev, newCategoryId]));
+
+    const newCatName =
+      newCategoryId === 'uncategorized'
+        ? 'Unkategorisiert'
+        : categories.find((c) => c.id === newCategoryId)?.name || 'neue Kategorie';
+    setToastMsg(`✅ ${fromTx.payee || fromTx.description.substring(0, 20)} → ${newCatName}`);
+
+    pendingRequests.current += 1;
     try {
-      const res = await fetch('/api/transactions/categorize', {
+      await fetch('/api/transactions/categorize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -269,15 +356,58 @@ export default function Dashboard() {
           categoryId: newCategoryId,
         }),
       });
-
-      if (res.ok) {
-        // Silently update dashboard stats to re-calculate amounts
-        fetchStats(selectedMonth, true);
-      }
     } catch (e) {
       console.error('Error recategorizing transaction:', e);
+      setToastMsg('❌ Speichern fehlgeschlagen – Daten werden neu geladen.');
+    } finally {
+      pendingRequests.current -= 1;
+      // Im Hintergrund mit dem Server abgleichen, sobald alle Umbuchungen gespeichert sind
+      if (pendingRequests.current === 0) fetchStats(selectedMonth, true);
     }
   };
+
+  // Kategorien in eingefrorener Reihenfolge anzeigen (inkl. Kategorien, die gerade leer geworden sind)
+  const displayCategories = useMemo<PieCategoryData[]>(() => {
+    if (!data) return [];
+    const byId = new Map(data.pieChartData.map((c) => [c.id, c]));
+    const originMeta = new Map<string, MovedTxInfo['originCat']>();
+    for (const info of Object.values(movedTx)) originMeta.set(info.originCat.id, info.originCat);
+
+    const result: PieCategoryData[] = [];
+    for (const id of categoryOrder) {
+      const c = byId.get(id);
+      if (c) {
+        result.push(c);
+        byId.delete(id);
+      } else if (originMeta.has(id)) {
+        const meta = originMeta.get(id)!;
+        result.push({ id, name: meta.name, color: meta.color, amount: 0, count: 0, percentage: 0, transactions: [] });
+      }
+    }
+    for (const c of byId.values()) result.push(c);
+    return result;
+  }, [data, categoryOrder, movedTx]);
+
+  // Ist die angezeigte Reihenfolge nicht mehr nach Betrag sortiert?
+  const isOrderStale = useMemo(() => {
+    const visible = displayCategories.filter((c) => c.amount > 0);
+    for (let i = 1; i < visible.length; i++) {
+      if (visible[i].amount > visible[i - 1].amount) return true;
+    }
+    return displayCategories.length !== visible.length;
+  }, [displayCategories]);
+
+  const resortCategories = () => {
+    if (!data) return;
+    setCategoryOrder([...data.pieChartData].sort((a, b) => b.amount - a.amount).map((c) => c.id));
+    setMovedTx({});
+  };
+
+  // Für Diagramm & Legende immer nach Betrag sortiert
+  const pieSorted = useMemo(
+    () => (data ? [...data.pieChartData].filter((c) => c.amount > 0).sort((a, b) => b.amount - a.amount) : []),
+    [data]
+  );
 
   const formatEuro = (num: number) => {
     return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
@@ -324,7 +454,6 @@ export default function Dashboard() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => {
-                setActiveFilterYear('all');
                 setSelectedMonth('all');
               }}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
@@ -343,7 +472,6 @@ export default function Dashboard() {
                 <button
                   key={year}
                   onClick={() => {
-                    setActiveFilterYear(year);
                     setSelectedMonth(year);
                   }}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
@@ -477,16 +605,17 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={data.pieChartData}
+                        data={pieSorted}
                         cx="50%"
                         cy="50%"
                         innerRadius={65}
                         outerRadius={105}
                         paddingAngle={3}
                         dataKey="amount"
+                        isAnimationActive={false}
                       >
-                        {data.pieChartData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        {pieSorted.map((entry) => (
+                          <Cell key={`cell-${entry.id}`} fill={entry.color} />
                         ))}
                       </Pie>
                       <Tooltip
@@ -500,7 +629,7 @@ export default function Dashboard() {
 
               {/* Legend Grid */}
               <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100 text-xs">
-                {data.pieChartData.map((item) => (
+                {pieSorted.map((item) => (
                   <div key={item.name} className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-50">
                     <div className="flex items-center gap-2 truncate">
                       <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
@@ -678,18 +807,56 @@ export default function Dashboard() {
 
           {/* Interactive Expandable Category Table with Direct Recategorization */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-bold text-slate-900">Kategorie-Aufschlüsselung im Detail</h3>
                 <p className="text-xs text-slate-500">
                   Klicken Sie auf eine Kategorie, um alle zugehörigen Buchungen aufzuklappen und direkt anzupassen.
                 </p>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="text-slate-500 font-medium">Einzelbuchungen:</span>
+                  <select
+                    value={txSortBy}
+                    onChange={(e) => setTxSortBy(e.target.value as any)}
+                    className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    <option value="amount_desc">💰 Umsatzgröße (größte zuerst)</option>
+                    <option value="amount_asc">💰 Umsatzgröße (kleinste zuerst)</option>
+                    <option value="date_desc">📅 Datum (neueste zuerst)</option>
+                    <option value="date_asc">📅 Datum (älteste zuerst)</option>
+                  </select>
+                </div>
+                {isOrderStale && (
+                  <button
+                    type="button"
+                    onClick={resortCategories}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition cursor-pointer"
+                    title="Reihenfolge bleibt beim Umbuchen stabil – hier nach Betrag neu sortieren"
+                  >
+                    ↕ Kategorien neu sortieren
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {data.pieChartData.map((cat) => {
+              {displayCategories.map((cat) => {
                 const isExpanded = expandedCatIds.has(cat.id);
+
+                // Echte Buchungen + Platzhalter für hier weg-verschobene Buchungen
+                type Row = { tx: TransactionItem; moved?: MovedTxInfo };
+                const ghostRows: Row[] = Object.values(movedTx)
+                  .filter((info) => info.originCat.id === cat.id)
+                  .map((info) => ({ tx: info.tx, moved: info }));
+                const rows: Row[] = [...cat.transactions.map((tx) => ({ tx })), ...ghostRows].sort((a, b) => {
+                  if (txSortBy === 'amount_asc') return Math.abs(a.tx.amount) - Math.abs(b.tx.amount);
+                  if (txSortBy === 'date_desc') return new Date(b.tx.date).getTime() - new Date(a.tx.date).getTime();
+                  if (txSortBy === 'date_asc') return new Date(a.tx.date).getTime() - new Date(b.tx.date).getTime();
+                  return Math.abs(b.tx.amount) - Math.abs(a.tx.amount);
+                });
+
                 return (
                   <div key={cat.id || cat.name} className="transition">
                     {/* Category Row Header (Clickable Accordion) */}
@@ -725,7 +892,7 @@ export default function Dashboard() {
                       </div>
 
                       <div className="text-right flex items-center justify-end gap-4">
-                        <span className="font-bold text-slate-900 text-sm block">{formatEuro(cat.amount)}</span>
+                        <span className="font-bold text-slate-900 text-sm block tabular-nums">{formatEuro(cat.amount)}</span>
                         <span className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition">
                           {isExpanded ? 'Zuklappen ▲' : 'Aufklappen ▼'}
                         </span>
@@ -734,61 +901,98 @@ export default function Dashboard() {
 
                     {/* Expanded Transactions List */}
                     {isExpanded && (
-                      <div className="bg-slate-50/70 p-4 sm:px-8 border-t border-b border-slate-200/80 space-y-3 animate-in fade-in duration-150">
+                      <div className="bg-slate-50/70 p-4 sm:px-8 border-t border-b border-slate-200/80 space-y-3">
                         <div className="flex items-center justify-between text-xs font-bold text-slate-700 mb-2">
                           <span>📑 Einzelbuchungen der Kategorie "{cat.name}" ({cat.transactions.length}):</span>
-                          <span className="text-slate-400 font-normal">Direkte Kategorie-Anpassung möglich</span>
+                          <span className="text-slate-400 font-normal">
+                            {ghostRows.length > 0
+                              ? 'Verschobene Buchungen verschwinden beim Zuklappen'
+                              : 'Direkte Kategorie-Anpassung möglich'}
+                          </span>
                         </div>
 
-                        {cat.transactions.length === 0 ? (
+                        {rows.length === 0 ? (
                           <div className="p-4 text-center text-xs text-slate-400">
                             Keine Buchungen in dieser Kategorie.
                           </div>
                         ) : (
                           <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
-                            {[...cat.transactions].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).map((tx) => (
-                              <div
-                                key={tx.id}
-                                className="p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-slate-50 transition"
-                              >
-                                <div className="space-y-0.5 max-w-lg">
-                                  <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                                    <span>{tx.payee || 'Unbekannter Empfänger'}</span>
-                                    {tx.iban && (
-                                      <span className="font-mono text-[11px] text-slate-400 font-normal">
-                                        ({tx.iban})
+                            {rows.map(({ tx, moved }) => {
+                              const isGhost = !!moved;
+                              const justArrived = !isGhost && movedTx[tx.id]?.toCatId === cat.id;
+                              const targetCat = moved
+                                ? moved.toCatId === 'uncategorized'
+                                  ? { name: 'Unkategorisiert', color: '#94a3b8' }
+                                  : categories.find((c) => c.id === moved.toCatId) || { name: 'Neue Kategorie', color: '#94a3b8' }
+                                : null;
+                              return (
+                                <div
+                                  key={`${isGhost ? 'ghost' : 'tx'}-${tx.id}`}
+                                  className={`p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition ${
+                                    isGhost
+                                      ? 'bg-slate-50/80'
+                                      : justArrived
+                                      ? 'bg-emerald-50/60 border-l-4 border-emerald-400'
+                                      : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <div className={`space-y-0.5 max-w-lg ${isGhost ? 'opacity-50' : ''}`}>
+                                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                                      <span className={isGhost ? 'line-through' : ''}>{tx.payee || 'Unbekannter Empfänger'}</span>
+                                      {tx.iban && (
+                                        <span className="font-mono text-[11px] text-slate-400 font-normal">
+                                          ({tx.iban})
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-slate-600 text-xs leading-relaxed truncate">
+                                      {tx.description}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-mono">
+                                      Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                                    {isGhost && targetCat && (
+                                      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-600">
+                                        → <span className="w-2 h-2 rounded-full" style={{ backgroundColor: targetCat.color }} />
+                                        {targetCat.name}
                                       </span>
                                     )}
-                                  </div>
-                                  <div className="text-slate-600 text-xs leading-relaxed truncate">
-                                    {tx.description}
-                                  </div>
-                                  <div className="text-[10px] text-slate-400 font-mono">
-                                    Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
+                                    {justArrived && (
+                                      <span className="text-[11px] font-semibold text-emerald-700">✓ neu zugeordnet</span>
+                                    )}
+                                    <span className={`font-extrabold text-sm text-slate-900 tabular-nums ${isGhost ? 'opacity-50' : ''}`}>
+                                      {formatEuro(tx.amount)}
+                                    </span>
+
+                                    {isGhost ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRecategorizeTransaction(tx.id, cat.id)}
+                                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                                      >
+                                        ↩ Rückgängig
+                                      </button>
+                                    ) : (
+                                      <select
+                                        value={tx.categoryId || 'uncategorized'}
+                                        onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
+                                        className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                                      >
+                                        <option value="uncategorized">❓ Unkategorisiert</option>
+                                        {categories.map((c) => (
+                                          <option key={c.id} value={c.id}>
+                                            {c.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    )}
                                   </div>
                                 </div>
-
-                                <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
-                                  <span className="font-extrabold text-sm text-slate-900">
-                                    {formatEuro(tx.amount)}
-                                  </span>
-
-                                  {/* Direct Category Dropdown */}
-                                  <select
-                                    value={tx.categoryId || 'uncategorized'}
-                                    onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
-                                    className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                                  >
-                                    <option value="uncategorized">❓ Unkategorisiert</option>
-                                    {categories.map((c) => (
-                                      <option key={c.id} value={c.id}>
-                                        {c.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>

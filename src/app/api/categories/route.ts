@@ -5,16 +5,35 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const categories = await prisma.category.findMany({
-      include: {
-        _count: {
-          select: { transactions: true, rules: true },
+    const [categories, sums] = await Promise.all([
+      prisma.category.findMany({
+        include: {
+          _count: {
+            select: { transactions: true, rules: true },
+          },
         },
-      },
-      orderBy: { name: 'asc' },
-    });
+        orderBy: { name: 'asc' },
+      }),
+      prisma.transaction.groupBy({
+        by: ['categoryId'],
+        where: { amount: { lt: 0 }, categoryId: { not: null } },
+        _sum: { amount: true },
+      }),
+    ]);
 
-    return NextResponse.json({ categories });
+    const sumByCatId = new Map<string, number>();
+    for (const row of sums) {
+      if (row.categoryId) {
+        sumByCatId.set(row.categoryId, Math.round(Math.abs(row._sum.amount || 0) * 100) / 100);
+      }
+    }
+
+    const enriched = categories.map((cat) => ({
+      ...cat,
+      totalAmount: sumByCatId.get(cat.id) || 0,
+    }));
+
+    return NextResponse.json({ categories: enriched });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
