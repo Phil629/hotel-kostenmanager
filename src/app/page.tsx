@@ -89,6 +89,19 @@ export default function Dashboard() {
     'amount_desc'
   );
 
+  // Aufgeklappte Einzelbuchungs-Texte (damit lange PayPal-/Banktexte komplett lesbar sind)
+  const [expandedTxIds, setExpandedTxIds] = useState<Set<string>>(new Set());
+  const [expandAllTxTexts, setExpandAllTxTexts] = usePersistentState<boolean>('dashboard.expandAllTxTexts', false);
+
+  const toggleTxTextExpand = (txId: string) => {
+    setExpandedTxIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(txId)) next.delete(txId);
+      else next.add(txId);
+      return next;
+    });
+  };
+
   // Eingefrorene Reihenfolge der Kategorien: Beim Umbuchen springt nichts mehr hin und her.
   const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
 
@@ -828,6 +841,18 @@ export default function Dashboard() {
                     <option value="date_asc">📅 Datum (älteste zuerst)</option>
                   </select>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setExpandAllTxTexts((prev) => !prev)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border ${
+                    expandAllTxTexts
+                      ? 'bg-blue-50 border-blue-200 text-blue-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                  title="Alle Verwendungszwecke vollständig mehrzeilig anzeigen"
+                >
+                  {expandAllTxTexts ? '📖 Alle Umsatztexte ausgeklappt' : '📄 Alle Umsatztexte ausklappen'}
+                </button>
                 {isOrderStale && (
                   <button
                     type="button"
@@ -936,16 +961,31 @@ export default function Dashboard() {
                                       : 'hover:bg-slate-50'
                                   }`}
                                 >
-                                  <div className={`space-y-0.5 max-w-lg ${isGhost ? 'opacity-50' : ''}`}>
-                                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                                  <div
+                                    onClick={() => toggleTxTextExpand(tx.id)}
+                                    title="Klicken, um den gesamten Umsatztext ein- oder auszuklappen"
+                                    className={`space-y-1 flex-1 min-w-0 cursor-pointer select-text ${isGhost ? 'opacity-50' : ''}`}
+                                  >
+                                    <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
                                       <span className={isGhost ? 'line-through' : ''}>{tx.payee || 'Unbekannter Empfänger'}</span>
                                       {tx.iban && (
                                         <span className="font-mono text-[11px] text-slate-400 font-normal">
                                           ({tx.iban})
                                         </span>
                                       )}
+                                      {tx.description.length > 70 && !expandAllTxTexts && (
+                                        <span className="text-[11px] font-semibold text-blue-600 hover:underline">
+                                          {expandedTxIds.has(tx.id) ? '▲ Text einklappen' : '▼ Ganzen Text anzeigen'}
+                                        </span>
+                                      )}
                                     </div>
-                                    <div className="text-slate-600 text-xs leading-relaxed truncate">
+                                    <div
+                                      className={`text-slate-600 text-xs leading-relaxed ${
+                                        expandAllTxTexts || expandedTxIds.has(tx.id)
+                                          ? 'whitespace-normal break-words bg-slate-50 p-2 rounded-lg border border-slate-200/80 text-slate-800'
+                                          : 'truncate'
+                                      }`}
+                                    >
                                       {tx.description}
                                     </div>
                                     <div className="text-[10px] text-slate-400 font-mono">
