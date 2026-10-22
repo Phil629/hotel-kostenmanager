@@ -103,10 +103,26 @@ export async function POST(req: NextRequest) {
           if (meta.uid) allMailboxUids.push(meta.uid);
         }
 
-        // 3. Nur die noch NIE geprüften UIDs herausfiltern (neueste zuerst)
-        const unseenUids = allMailboxUids
-          .filter((uid) => !processedMsgUidNumbers.has(uid))
-          .sort((a, b) => b - a);
+        // 3. Wasserzeichen (High-Water Mark):
+        // Höchste bereits bekannte UID bestimmen. Alle älteren E-Mails (Altbestand mit kleinerer UID)
+        // werden komplett ignoriert! Alle seit dem letzten Stand NEU hinzugekommenen E-Mails (uid > maxKnownUid)
+        // werden hingegen lückenlos geladen – selbst wenn man 1-2 Monate nicht im Programm war und 60 neue Mails ankamen.
+        const maxKnownUid =
+          processedMsgUidNumbers.size > 0 ? Math.max(...Array.from(processedMsgUidNumbers)) : 0;
+
+        let unseenUids: number[] = [];
+        if (maxKnownUid > 0 && !body.lookbackCount) {
+          // Standardfall: NUR E-Mails laden, die neuer sind als unser letzter bekannter Stand (uid > maxKnownUid)
+          unseenUids = allMailboxUids
+            .filter((uid) => uid > maxKnownUid && !processedMsgUidNumbers.has(uid))
+            .sort((a, b) => b - a);
+        } else {
+          // Erst-Einrichtung (oder expliziter Rückblick): Nur die neuesten N E-Mails prüfen (Standard: 5),
+          // damit niemals hunderte Alt-Mails aus der Vergangenheit geladen werden.
+          const initialLimit = Math.min(Number(body.lookbackCount) || 5, 50);
+          const newestUids = [...allMailboxUids].sort((a, b) => b - a).slice(0, initialLimit);
+          unseenUids = newestUids.filter((uid) => !processedMsgUidNumbers.has(uid));
+        }
 
         const batchSize = Math.min(Number(body.batchSize) || 8, 15);
         const batchUids = unseenUids.slice(0, batchSize);
