@@ -127,7 +127,10 @@ export default function RulesPage() {
     setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & Buchungen zugeordnet!`);
 
     try {
-      const txIds = rule.matchingTransactions.map((t) => t.id);
+      // Nur offene Umsätze oder bereits dieser Regel-Kategorie zugeordnete Umsätze automatisch umstellen
+      const txIds = rule.matchingTransactions
+        .filter((t) => !t.category || t.category.id === rule.category?.id)
+        .map((t) => t.id);
       const res = await fetch('/api/rules', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -158,8 +161,11 @@ export default function RulesPage() {
     setEditMatchType(rule.matchType);
     setShowInlineRejectOptions(openRejectImmediately);
 
-    const allIds = new Set((rule.matchingTransactions || []).map((t) => t.id));
-    setSelectedTxIds(allIds);
+    const safeMatching = (rule.matchingTransactions || []).filter(
+      (t) => !t.category || t.category.id === rule.category?.id
+    );
+    const defaultIds = safeMatching.length > 0 ? safeMatching.map((t) => t.id) : (rule.matchingTransactions || []).map((t) => t.id);
+    setSelectedTxIds(new Set(defaultIds));
   };
 
   const toggleTxSelection = (id: string) => {

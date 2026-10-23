@@ -1,5 +1,5 @@
 import { prisma } from './prisma';
-import { isGenericPaymentProvider } from './invoiceMatcher';
+import { isGenericPaymentProvider, isIgnoredFallbackCategory } from './invoiceMatcher';
 
 export interface MatchResult {
   categoryId: string | null;
@@ -109,9 +109,19 @@ export async function learnRuleFromAssignment(
   description: string,
   isApproved = true
 ): Promise<{ ruleCreated: boolean; pattern: string; retroactivelyAppliedCount: number }> {
-  // Schutz: Für Sammel-Zahlungsdienstleister (PayPal, Amazon, SumUp, Kartenzahlung) darf niemals
+  // Schutz 1: Für Sammel-Zahlungsdienstleister (PayPal, Amazon, Kartenzahlung) darf niemals
   // eine pauschale IBAN- oder Payee-Dauerregel gelernt werden, da sonst alle Einkäufe in einer Kategorie landen!
   if (isGenericPaymentProvider(payee, '')) {
+    return {
+      ruleCreated: false,
+      pattern: '',
+      retroactivelyAppliedCount: 0,
+    };
+  }
+
+  // Schutz 2: Für die Sammel-Kategorie "Sonstiges" darf niemals eine automatische Dauerregel angelegt werden!
+  const targetCategory = await prisma.category.findUnique({ where: { id: categoryId } });
+  if (!targetCategory || isIgnoredFallbackCategory(targetCategory.name)) {
     return {
       ruleCreated: false,
       pattern: '',

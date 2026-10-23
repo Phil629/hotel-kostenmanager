@@ -330,7 +330,9 @@ function parseGermanNumber(raw: string): number | null {
   return isNaN(val) ? null : Math.round(val * 100) / 100;
 }
 
-const GENERIC_PAYEES = ['paypal', 'amazon', 'concardis', 'nexi', 'sumup', 'klarna', 'stripe', 'kartenzahlung', 'ec-karte', 'visa', 'mastercard'];
+// Sammel-Zahlungsdienstleister beim Einkauf (wo jeder Umsatz ein anderer Händler/Artikel sein kann).
+// Hinweis: Hotel-Terminal-Anbieter wie Nexi/Concardis gehören NICHT hierhin, da deren Gebühren fest in "Darlehen & Bankkosten" gehören.
+const GENERIC_PAYEES = ['paypal', 'amazon', 'klarna', 'kartenzahlung', 'ec-karte', 'visa', 'mastercard'];
 
 export function isGenericPaymentProvider(payee: string | null, description: string): boolean {
   const combined = `${payee || ''} ${description}`.toLowerCase();

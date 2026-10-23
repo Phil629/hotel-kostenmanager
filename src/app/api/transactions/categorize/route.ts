@@ -43,6 +43,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    // Falls ein Rechnungsbeleg mit diesem Umsatz verknüpft ist, Kategorie dort synchron halten
+    await prisma.invoice.updateMany({
+      where: { matchedTransactionId: transactionId },
+      data: { suggestedCategoryId: isReset ? null : categoryId },
+    });
+
     let learnResult = { ruleCreated: false, pattern: '', retroactivelyAppliedCount: 0 };
 
     if (!isReset && createRule) {

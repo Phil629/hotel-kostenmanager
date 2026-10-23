@@ -130,6 +130,15 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Regel-ID erforderlich' }, { status: 400 });
     }
 
+    const existingRule = await prisma.rule.findUnique({ where: { id } });
+    if (!existingRule) {
+      return NextResponse.json({ error: 'Regel nicht gefunden' }, { status: 404 });
+    }
+
+    const patternChanged =
+      (pattern !== undefined && pattern.trim() !== existingRule.pattern) ||
+      (matchType !== undefined && matchType !== existingRule.matchType);
+
     const updateData: any = {};
     if (categoryId) updateData.category = { connect: { id: categoryId } };
     if (matchType) updateData.matchType = matchType;
@@ -143,9 +152,46 @@ export async function PUT(req: NextRequest) {
     });
 
     let updatedTxCount = 0;
+    const targetCatId = categoryId || rule.categoryId;
 
-    if (Array.isArray(updateTransactionIds) && updateTransactionIds.length > 0) {
-      const targetCatId = categoryId || rule.categoryId;
+    if (patternChanged) {
+      // Wenn das Suchmuster oder der Typ geändert wurde, wende die neue Regel nur auf passende offene Umsätze an
+      const patternLower = (rule.pattern || '').toLowerCase().trim();
+      const cleanRuleIban = (rule.pattern || '').replace(/\s+/g, '').toUpperCase();
+      if (patternLower) {
+        const candidates = await prisma.transaction.findMany({
+          where: {
+            amount: { lt: 0 },
+            OR: [{ status: 'UNCATEGORIZED' }, { categoryId: null }, { matchedRuleId: rule.id }],
+          },
+        });
+        const matchedIds = candidates
+          .filter((t) => {
+            if (rule.matchType === 'IBAN') {
+              return !!t.iban && !!cleanRuleIban && t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
+            }
+            if (rule.matchType === 'PAYEE') {
+              return !!t.payee && t.payee.toLowerCase().trim().includes(patternLower);
+            }
+            const payeeLower = (t.payee || '').toLowerCase();
+            const descLower = (t.description || '').toLowerCase();
+            return descLower.includes(patternLower) || payeeLower.includes(patternLower);
+          })
+          .map((t) => t.id);
+
+        if (matchedIds.length > 0) {
+          const res = await prisma.transaction.updateMany({
+            where: { id: { in: matchedIds } },
+            data: {
+              categoryId: targetCatId,
+              status: 'CATEGORIZED',
+              matchedRuleId: rule.id,
+            },
+          });
+          updatedTxCount = res.count;
+        }
+      }
+    } else if (Array.isArray(updateTransactionIds) && updateTransactionIds.length > 0) {
       const result = await prisma.transaction.updateMany({
         where: {
           id: { in: updateTransactionIds },
