@@ -32,6 +32,8 @@ model Rule {
   isApproved   Boolean       @default(true) // Rules must be approved to automatically categorize transactions
   transactions Transaction[]
   createdAt    DateTime      @default(now())
+
+  @@index([categoryId])
 }
 
 model Transaction {
@@ -49,6 +51,11 @@ model Transaction {
   invoice       Invoice?
   rawHash       String    @unique
   createdAt     DateTime  @default(now())
+
+  @@index([date, amount])
+  @@index([categoryId])
+  @@index([status])
+  @@index([matchedRuleId])
 }
 
 model Invoice {
@@ -72,6 +79,9 @@ model Invoice {
   status               String       @default("PENDING") // "MATCHED" | "PENDING" | "IGNORED"
   confidence           Float        @default(0.9)
   createdAt            DateTime     @default(now())
+
+  @@index([status])
+  @@index([suggestedCategoryId])
 }
 
 model Budget {
