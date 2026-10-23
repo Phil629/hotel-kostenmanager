@@ -43,18 +43,22 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, ...result });
       }
 
-      if (body.action === 'updateCategory' && body.invoiceId && body.categoryId) {
+      if (body.action === 'updateCategory' && body.invoiceId) {
+        const nextCatId = body.categoryId ? body.categoryId : null;
         const inv = await prisma.invoice.update({
           where: { id: body.invoiceId },
-          data: { suggestedCategoryId: body.categoryId },
+          data: { suggestedCategoryId: nextCatId },
         });
         // Falls bereits mit einer Transaktion verknüpft, diese ebenfalls aktualisieren
         if (inv.matchedTransactionId) {
           await prisma.transaction.update({
             where: { id: inv.matchedTransactionId },
-            data: { categoryId: body.categoryId, status: 'CATEGORIZED' },
+            data: {
+              categoryId: nextCatId,
+              status: nextCatId ? 'CATEGORIZED' : 'UNCATEGORIZED',
+            },
           });
-        } else {
+        } else if (nextCatId) {
           await matchInvoiceToTransaction(inv.id);
         }
         return NextResponse.json({ success: true });
@@ -129,7 +133,19 @@ export async function DELETE(req: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: 'ID fehlt' }, { status: 400 });
     }
-    await prisma.invoice.delete({ where: { id } });
+    const existing = await prisma.invoice.findUnique({ where: { id } });
+    if (!existing) {
+      return NextResponse.json({ success: true });
+    }
+    if (existing.messageUid) {
+      // Gmail-Rechnungen als SKIPPED markieren, damit ihre UID bekannt bleibt und sie beim nächsten Sync nicht erneut geladen werden
+      await prisma.invoice.update({
+        where: { id },
+        data: { status: 'SKIPPED', matchedTransactionId: null },
+      });
+    } else {
+      await prisma.invoice.delete({ where: { id } });
+    }
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

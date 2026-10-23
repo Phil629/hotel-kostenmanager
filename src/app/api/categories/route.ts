@@ -9,7 +9,7 @@ export async function GET() {
       prisma.category.findMany({
         include: {
           _count: {
-            select: { transactions: true, rules: true },
+            select: { rules: true },
           },
         },
         orderBy: { name: 'asc' },
@@ -18,19 +18,26 @@ export async function GET() {
         by: ['categoryId'],
         where: { amount: { lt: 0 }, categoryId: { not: null } },
         _sum: { amount: true },
+        _count: { _all: true },
       }),
     ]);
 
     const sumByCatId = new Map<string, number>();
+    const countByCatId = new Map<string, number>();
     for (const row of sums) {
       if (row.categoryId) {
         sumByCatId.set(row.categoryId, Math.round(Math.abs(row._sum.amount || 0) * 100) / 100);
+        countByCatId.set(row.categoryId, row._count._all || 0);
       }
     }
 
     const enriched = categories.map((cat) => ({
       ...cat,
       totalAmount: sumByCatId.get(cat.id) || 0,
+      _count: {
+        rules: cat._count.rules,
+        transactions: countByCatId.get(cat.id) || 0,
+      },
     }));
 
     return NextResponse.json({ categories: enriched });

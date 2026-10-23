@@ -242,10 +242,10 @@ export default function TransactionsPage() {
   };
 
   const toggleSelectAllVisible = () => {
-    if (selectedTxIds.size === transactions.length) {
+    if (selectedTxIds.size > 0 && selectedTxIds.size === sortedTransactions.length) {
       setSelectedTxIds(new Set());
     } else {
-      setSelectedTxIds(new Set(transactions.map((t) => t.id)));
+      setSelectedTxIds(new Set(sortedTransactions.map((t) => t.id)));
     }
   };
 
@@ -381,16 +381,19 @@ export default function TransactionsPage() {
     setEditingRuleFromTx(rule);
     setRuleNewCatId(rule.categoryId || categories[0]?.id || '');
 
-    const patternLower = rule.pattern.toLowerCase().trim();
-    const cleanRuleIban = rule.pattern.replace(/\s+/g, '').toUpperCase();
+    const patternLower = (rule.pattern || '').toLowerCase().trim();
+    const cleanRuleIban = (rule.pattern || '').replace(/\s+/g, '').toUpperCase();
 
     const matching = transactions.filter((t) => {
-      if (rule.matchType === 'IBAN' && t.iban) {
+      if (!patternLower) return false;
+      if (rule.matchType === 'IBAN') {
+        if (!t.iban || !cleanRuleIban) return false;
         return t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
       }
-      if (rule.matchType === 'PAYEE' && t.payee) {
+      if (rule.matchType === 'PAYEE') {
+        if (!t.payee) return false;
         const payeeLower = t.payee.toLowerCase().trim();
-        return payeeLower.includes(patternLower) || patternLower.includes(payeeLower);
+        return payeeLower.includes(patternLower);
       }
       const payeeLower = (t.payee || '').toLowerCase();
       const descLower = (t.description || '').toLowerCase();
@@ -459,6 +462,15 @@ export default function TransactionsPage() {
           name: data.suggestion.suggestedCategoryName,
           score: Math.round(data.suggestion.confidenceScore * 100),
           reasoning: data.suggestion.reasoning,
+        });
+      } else if (data.suggestion) {
+        setAiResult({
+          suggestedCategoryId: '',
+          name: 'Keine eindeutige Kategorie erkannt',
+          score: 0,
+          reasoning:
+            data.suggestion.reasoning ||
+            'Für diesen Umsatz ist keine eindeutige Zuordnung ohne Rechnungsbeleg erkennbar (Kategorie "Sonstiges" wird bewusst ignoriert).',
         });
       }
     } catch (e) {

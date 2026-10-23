@@ -769,7 +769,13 @@ export default function Dashboard() {
                           const mIdx = shortMonthNames.indexOf(e.activeLabel);
                           if (mIdx !== -1) {
                             const mStr = String(mIdx + 1).padStart(2, '0');
-                            const targetYear = activeChartYears.includes('2026') ? '2026' : (activeChartYears[0] || '2026');
+                            const monthRow = data.barChartData?.[mIdx];
+                            const sortedActive = [...activeChartYears].sort().reverse();
+                            // Wähle das neueste aktive Jahr, das in diesem Monat tatsächlich Umsätze (> 0) hat
+                            const yearWithData = sortedActive.find(
+                              (y) => monthRow && Number(monthRow[y] || 0) > 0
+                            );
+                            const targetYear = yearWithData || sortedActive[0] || '2026';
                             handleSelectMonthDirect(`${targetYear}-${mStr}`);
                           }
                         }

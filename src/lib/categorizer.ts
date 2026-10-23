@@ -1,4 +1,5 @@
 import { prisma } from './prisma';
+import { isGenericPaymentProvider } from './invoiceMatcher';
 
 export interface MatchResult {
   categoryId: string | null;
@@ -13,10 +14,12 @@ export async function matchTransaction(
   preloadedRules?: any[]
 ): Promise<MatchResult> {
   // Only query APPROVED rules if not preloaded
-  const rules = preloadedRules || await prisma.rule.findMany({
-    where: { isApproved: true },
-    include: { category: true },
-  });
+  const rules =
+    preloadedRules ||
+    (await prisma.rule.findMany({
+      where: { isApproved: true },
+      include: { category: true },
+    }));
 
   const cleanIban = (iban || '').replace(/\s+/g, '').toUpperCase();
   const cleanPayee = (payee || '').toLowerCase().trim();
@@ -25,14 +28,14 @@ export async function matchTransaction(
   // Sort rules in memory by pattern length descending!
   // This guarantees that more specific rules (e.g. "Telekom Deutschland")
   // are evaluated BEFORE generic rules (e.g. "Telekom").
-  const sortedRules = [...rules].sort((a, b) => b.pattern.length - a.pattern.length);
+  const sortedRules = [...rules].sort((a, b) => (b.pattern || '').length - (a.pattern || '').length);
 
   // Priority 1: Match by IBAN
   if (cleanIban) {
     for (const rule of sortedRules) {
       if (rule.matchType === 'IBAN') {
-        const cleanRuleIban = rule.pattern.replace(/\s+/g, '').toUpperCase();
-        if (cleanIban === cleanRuleIban) {
+        const cleanRuleIban = (rule.pattern || '').replace(/\s+/g, '').toUpperCase();
+        if (cleanRuleIban && cleanIban === cleanRuleIban) {
           return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
         }
       }
@@ -43,8 +46,8 @@ export async function matchTransaction(
   if (cleanPayee) {
     for (const rule of sortedRules) {
       if (rule.matchType === 'PAYEE') {
-        const patternLower = rule.pattern.toLowerCase().trim();
-        if (cleanPayee.includes(patternLower)) {
+        const patternLower = (rule.pattern || '').toLowerCase().trim();
+        if (patternLower && cleanPayee.includes(patternLower)) {
           return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
         }
       }
@@ -54,7 +57,7 @@ export async function matchTransaction(
   // Priority 3: Match by KEYWORD in Payee or Description
   for (const rule of sortedRules) {
     if (rule.matchType === 'KEYWORD') {
-      const pattern = rule.pattern.toLowerCase().trim();
+      const pattern = (rule.pattern || '').toLowerCase().trim();
       if (pattern && (cleanDesc.includes(pattern) || cleanPayee.includes(pattern))) {
         return { categoryId: rule.categoryId, ruleId: rule.id, status: 'CATEGORIZED' };
       }
@@ -68,8 +71,13 @@ export async function matchTransaction(
  * Clean vendor name to form a reliable rule pattern.
  */
 function extractCleanPattern(payee: string | null, description: string): { matchType: string; pattern: string } {
+  // WICHTIG: Niemals eine pauschale Empfänger-Regel für Sammel-Zahlungsdienstleister (PayPal, Amazon, Kartenzahlung etc.) anlegen!
+  if (isGenericPaymentProvider(payee, '')) {
+    return { matchType: 'KEYWORD', pattern: '' };
+  }
+
   if (payee && payee.trim().length > 2) {
-    let clean = payee.trim();
+    const clean = payee.trim();
     if (clean.toLowerCase().includes('reiter')) return { matchType: 'PAYEE', pattern: 'Reiter' };
     if (clean.toLowerCase().includes('metro')) return { matchType: 'PAYEE', pattern: 'METRO' };
     if (clean.toLowerCase().includes('schwälbchen')) return { matchType: 'PAYEE', pattern: 'Schwälbchen' };
@@ -81,9 +89,11 @@ function extractCleanPattern(payee: string | null, description: string): { match
     return { matchType: 'PAYEE', pattern: shortPattern.length > 2 ? shortPattern : clean };
   }
 
-  if (description && description.trim().length > 3) {
+  if (description && description.trim().length > 3 && !isGenericPaymentProvider(null, description)) {
     const parts = description.trim().split(/\s+/);
-    return { matchType: 'KEYWORD', pattern: parts[0] };
+    if (parts[0].length >= 4) {
+      return { matchType: 'KEYWORD', pattern: parts[0] };
+    }
   }
 
   return { matchType: 'KEYWORD', pattern: '' };
@@ -99,6 +109,16 @@ export async function learnRuleFromAssignment(
   description: string,
   isApproved = true
 ): Promise<{ ruleCreated: boolean; pattern: string; retroactivelyAppliedCount: number }> {
+  // Schutz: Für Sammel-Zahlungsdienstleister (PayPal, Amazon, SumUp, Kartenzahlung) darf niemals
+  // eine pauschale IBAN- oder Payee-Dauerregel gelernt werden, da sonst alle Einkäufe in einer Kategorie landen!
+  if (isGenericPaymentProvider(payee, '')) {
+    return {
+      ruleCreated: false,
+      pattern: '',
+      retroactivelyAppliedCount: 0,
+    };
+  }
+
   const cleanIban = (iban || '').replace(/\s+/g, '').toUpperCase();
 
   let createdRulesCount = 0;
@@ -147,7 +167,7 @@ export async function learnRuleFromAssignment(
   let retroactivelyAppliedCount = 0;
   if (isApproved) {
     const uncategorized = await prisma.transaction.findMany({
-      where: { status: 'UNCATEGORIZED' },
+      where: { status: 'UNCATEGORIZED', categoryId: null },
     });
 
     const preloadedRules = await prisma.rule.findMany({

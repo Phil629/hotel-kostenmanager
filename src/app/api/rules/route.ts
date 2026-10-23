@@ -18,14 +18,17 @@ export async function GET() {
     });
 
     const rulesWithMatches = rules.map((rule) => {
-      const patternLower = rule.pattern.toLowerCase().trim();
-      const cleanRuleIban = rule.pattern.replace(/\s+/g, '').toUpperCase();
+      const patternLower = (rule.pattern || '').toLowerCase().trim();
+      const cleanRuleIban = (rule.pattern || '').replace(/\s+/g, '').toUpperCase();
 
       const matchingTransactions = transactions.filter((t) => {
-        if (rule.matchType === 'IBAN' && t.iban) {
+        if (!patternLower) return false;
+        if (rule.matchType === 'IBAN') {
+          if (!t.iban || !cleanRuleIban) return false;
           return t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
         }
-        if (rule.matchType === 'PAYEE' && t.payee) {
+        if (rule.matchType === 'PAYEE') {
+          if (!t.payee) return false;
           const payeeLower = t.payee.toLowerCase().trim();
           return payeeLower.includes(patternLower);
         }
@@ -54,7 +57,7 @@ export async function POST(req: NextRequest) {
   try {
     const { categoryId, matchType, pattern, applyToExisting = true, isApproved = true } = await req.json();
 
-    if (!categoryId || !matchType || !pattern) {
+    if (!categoryId || !matchType || !pattern || !pattern.trim()) {
       return NextResponse.json({ error: 'categoryId, matchType und pattern erforderlich' }, { status: 400 });
     }
 
@@ -74,18 +77,26 @@ export async function POST(req: NextRequest) {
       const patternLower = pattern.toLowerCase().trim();
       const cleanRuleIban = pattern.replace(/\s+/g, '').toUpperCase();
 
-      const allTxs = await prisma.transaction.findMany({
-        where: { amount: { lt: 0 } },
+      // Nur auf noch offene (unkategorisierte) Umsätze anwenden, damit manuelle Zuordnungen niemals überschrieben werden!
+      const openTxs = await prisma.transaction.findMany({
+        where: {
+          amount: { lt: 0 },
+          OR: [{ status: 'UNCATEGORIZED' }, { categoryId: null }],
+        },
       });
 
-      for (const t of allTxs) {
+      for (const t of openTxs) {
         let isMatch = false;
-        if (matchType === 'IBAN' && t.iban) {
-          isMatch = t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
-        } else if (matchType === 'PAYEE' && t.payee) {
-          const payeeLower = t.payee.toLowerCase().trim();
-          isMatch = payeeLower.includes(patternLower);
-        } else if (matchType === 'KEYWORD') {
+        if (matchType === 'IBAN') {
+          if (t.iban && cleanRuleIban) {
+            isMatch = t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
+          }
+        } else if (matchType === 'PAYEE') {
+          if (t.payee && patternLower) {
+            const payeeLower = t.payee.toLowerCase().trim();
+            isMatch = payeeLower.includes(patternLower);
+          }
+        } else if (matchType === 'KEYWORD' && patternLower) {
           const payeeLower = (t.payee || '').toLowerCase();
           const descLower = (t.description || '').toLowerCase();
           isMatch = descLower.includes(patternLower) || payeeLower.includes(patternLower);
