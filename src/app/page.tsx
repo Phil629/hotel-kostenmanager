@@ -12,8 +12,8 @@ import {
   Bar,
   XAxis,
   YAxis,
+  CartesianGrid,
   Tooltip,
-  Legend,
   ReferenceLine,
 } from 'recharts';
 
@@ -134,6 +134,8 @@ export default function Dashboard() {
 
   // Interactive Year Filter for Bar Chart
   const [activeChartYears, setActiveChartYears] = useState<string[]>([]);
+  const [hoveredChartYear, setHoveredChartYear] = useState<string | null>(null);
+  const [showAvgLines, setShowAvgLines] = useState<boolean>(true);
 
   useEffect(() => {
     if (data?.availableYears && activeChartYears.length === 0) {
@@ -159,15 +161,15 @@ export default function Dashboard() {
   };
 
   const yearColors: Record<string, string> = {
-    '2026': '#2563eb', // Blue
-    '2025': '#475569', // Slate / Dark
-    '2024': '#0284c7', // Sky blue
-    '2023': '#10b981', // Emerald green
+    '2026': '#2563eb', // Royal Blue
+    '2025': '#334155', // Deep Slate
+    '2024': '#0ea5e9', // Sky Blue
+    '2023': '#10b981', // Emerald
   };
 
-  const getYearAverages = () => {
+  const getAllYearAverages = () => {
     if (!data?.barChartData) return {};
-    const yearsToConsider = activeChartYears.length > 0 ? activeChartYears : data.availableYears || [];
+    const yearsToConsider = data.availableYears || [];
     const averages: Record<string, number> = {};
 
     for (const y of yearsToConsider) {
@@ -193,7 +195,11 @@ export default function Dashboard() {
     setSelectedMonth(val);
   };
 
-  const yearAverages = getYearAverages();
+  const yearAverages = getAllYearAverages();
+
+  const formatEuroWhole = (num: number) => {
+    return Math.round(num).toLocaleString('de-DE') + ' €';
+  };
 
   const fetchCategories = async () => {
     try {
@@ -654,75 +660,109 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Bar Chart - Monthly Comparison with Interactive Year Selection & Dashed Average Line */}
+            {/* Bar Chart - Monthly Comparison with Unified Interactive Year KPI Cards */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                {/* Clean Header Row */}
+                <div className="flex items-start justify-between gap-3 mb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900 mb-0.5">Monatlicher Ausgabenvergleich</h3>
-                    <p className="text-xs text-slate-500">Vergleich der Gesamtkosten pro Monat (Jan–Dez)</p>
+                    <h3 className="text-lg font-bold text-slate-900 tracking-tight">Monatlicher Ausgabenvergleich</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Gesamtkosten pro Monat (Jan–Dez) • Klicken Sie auf ein Jahr zum Ein-/Ausblenden
+                    </p>
                   </div>
-                  {/* Dynamic year-specific average chips */}
-                  <div className="flex flex-wrap items-center gap-1.5 self-start sm:self-auto">
-                    {Object.entries(yearAverages).map(([year, avgVal]) => {
-                      const color = yearColors[year] || '#64748b';
-                      return (
-                        <div
-                          key={`chip-${year}`}
-                          className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold shadow-2xs"
-                        >
-                          <span className="w-2.5 h-0.5 border-t-2 border-dashed" style={{ borderColor: color }}></span>
-                          <span className="text-slate-600">Ø {year}:</span>
-                          <b style={{ color }}>{formatEuro(avgVal)}</b>
-                        </div>
-                      );
-                    })}
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {activeChartYears.length < (data.availableYears?.length || 0) && (
+                      <button
+                        type="button"
+                        onClick={selectAllChartYears}
+                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] transition cursor-pointer"
+                      >
+                        Alle Jahre
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowAvgLines((prev) => !prev)}
+                      className={`px-2.5 py-1 rounded-lg font-semibold text-[11px] transition cursor-pointer border ${
+                        showAvgLines
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                      }`}
+                      title="Monatsdurchschnitts-Linien im Diagramm ein-/ausblenden"
+                    >
+                      -- Ø-Linien
+                    </button>
                   </div>
                 </div>
 
-                {/* Interactive Year Selector Pills */}
-                <div className="flex flex-wrap items-center gap-1.5 mb-4 pb-3 border-b border-slate-100 text-xs">
-                  <span className="text-slate-500 font-medium mr-1 text-[11px]">Jahre filtern:</span>
-                  <button
-                    onClick={selectAllChartYears}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer ${
-                      activeChartYears.length === (data.availableYears?.length || 0)
-                        ? 'bg-slate-900 text-white shadow-2xs'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    Alle
-                  </button>
+                {/* Unified Interactive Year Filter + Legend + Monthly Average KPI Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
                   {data.availableYears?.map((year) => {
                     const isSelected = activeChartYears.includes(year);
                     const color = yearColors[year] || '#64748b';
+                    const avgVal = yearAverages[year] || 0;
+                    const isHovered = hoveredChartYear === year;
+
                     return (
                       <button
                         key={year}
+                        type="button"
                         onClick={() => toggleChartYear(year)}
+                        onMouseEnter={() => setHoveredChartYear(year)}
+                        onMouseLeave={() => setHoveredChartYear(null)}
+                        className={`text-left p-2.5 rounded-xl border transition-all cursor-pointer relative overflow-hidden ${
+                          isSelected
+                            ? 'bg-white border-slate-200/90 shadow-2xs hover:border-slate-300'
+                            : 'bg-slate-50/70 border-slate-100 opacity-50 hover:opacity-80'
+                        }`}
                         style={{
-                          backgroundColor: isSelected ? color : '#f1f5f9',
-                          color: isSelected ? '#ffffff' : '#64748b',
+                          borderLeftWidth: '4px',
+                          borderLeftColor: isSelected ? color : '#cbd5e1',
+                          transform: isHovered && isSelected ? 'translateY(-1px)' : 'none',
                         }}
-                        className={`px-3 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer flex items-center gap-1.5 shadow-2xs hover:opacity-90`}
-                        title={`Klicken zum Ein-/Ausblenden von ${year}`}
+                        title={`Jahr ${year} im Diagramm ${isSelected ? 'ausblenden' : 'einblenden'}`}
                       >
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: isSelected ? '#ffffff' : color }}
-                        />
-                        <span>{year}</span>
-                        {isSelected && <span className="text-[10px] opacity-80">✓</span>}
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: isSelected ? color : '#94a3b8' }}
+                            />
+                            <span className="text-xs font-extrabold text-slate-900">{year}</span>
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                              isSelected ? 'text-slate-600 bg-slate-100' : 'text-slate-400'
+                            }`}
+                          >
+                            {isSelected ? 'Aktiv' : 'Aus'}
+                          </span>
+                        </div>
+
+                        <div className="mt-1.5 flex items-baseline justify-between">
+                          <span className="text-[10px] text-slate-400 font-medium">Ø / Mon.</span>
+                          <span
+                            className="text-xs font-bold tabular-nums tracking-tight"
+                            style={{ color: isSelected ? color : '#64748b' }}
+                          >
+                            {avgVal > 0 ? formatEuroWhole(avgVal) : '–'}
+                          </span>
+                        </div>
                       </button>
                     );
                   })}
                 </div>
 
+                {/* Clean Financial BarChart */}
                 <div className="h-72 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={data.barChartData}
-                      margin={{ top: 15, right: 10, left: -15, bottom: 0 }}
+                      margin={{ top: 10, right: 8, left: -12, bottom: 0 }}
+                      barGap={2}
+                      barCategoryGap="20%"
                       className="cursor-pointer"
                       onClick={(e: any) => {
                         if (e && e.activeLabel) {
@@ -735,15 +775,28 @@ export default function Dashboard() {
                         }
                       }}
                     >
-                      <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${Math.round(v / 1000)}k€`} />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis
+                        dataKey="month"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
+                        dy={6}
+                      />
+                      <YAxis
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11, fill: '#94a3b8' }}
+                        tickFormatter={(v) => (v === 0 ? '0 €' : `${Math.round(v / 1000)}k €`)}
+                      />
                       <Tooltip
+                        cursor={{ fill: '#f8fafc' }}
                         content={({ active, payload, label }: any) => {
                           if (active && payload && payload.length) {
                             return (
-                              <div className="bg-slate-900 text-white p-3.5 rounded-xl shadow-2xl text-xs space-y-2 border border-slate-700 min-w-[210px]">
-                                <div className="font-bold text-slate-100 border-b border-slate-700 pb-1.5 flex items-center justify-between">
-                                  <span>📅 {label} (Ausgaben)</span>
+                              <div className="bg-slate-900/95 backdrop-blur-xs text-white p-3.5 rounded-xl shadow-xl text-xs space-y-2 border border-slate-700/80 min-w-[220px]">
+                                <div className="font-bold text-slate-100 border-b border-slate-700/80 pb-1.5 flex items-center justify-between">
+                                  <span>📅 {label}</span>
                                   <span className="text-[10px] text-blue-400 font-normal">Klick öffnet Monat ↗</span>
                                 </div>
                                 <div className="space-y-1.5">
@@ -753,16 +806,16 @@ export default function Dashboard() {
                                     const avg = yearAverages[year];
                                     const diff = avg && val > 0 ? val - avg : 0;
                                     return (
-                                      <div key={year} className="flex items-center justify-between gap-3 text-xs">
+                                      <div key={year} className="flex items-center justify-between gap-4 text-xs">
                                         <div className="flex items-center gap-1.5">
-                                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
-                                          <span className="font-semibold text-slate-300">Jahr {year}:</span>
+                                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: entry.color }} />
+                                          <span className="font-semibold text-slate-300">{year}:</span>
                                         </div>
-                                        <div className="text-right">
-                                          <span className="font-bold text-white">{formatEuro(val)}</span>
+                                        <div className="text-right tabular-nums">
+                                          <span className="font-bold text-white">{formatEuroWhole(val)}</span>
                                           {avg > 0 && val > 0 && (
                                             <span className={`block text-[10px] ${diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                              {diff > 0 ? `+${formatEuro(diff)} vs Ø` : `${formatEuro(diff)} vs Ø`}
+                                              {diff > 0 ? `+${formatEuroWhole(diff)} vs. Ø` : `${formatEuroWhole(diff)} vs. Ø`}
                                             </span>
                                           )}
                                         </div>
@@ -776,31 +829,42 @@ export default function Dashboard() {
                           return null;
                         }}
                       />
-                      <Legend />
-                      {/* Clean dashed lines for each active year (no overlapping text across bars) */}
-                      {Object.entries(yearAverages).map(([year, avgVal]) => {
-                        const color = yearColors[year] || '#64748b';
-                        return (
-                          <ReferenceLine
-                            key={`ref-${year}`}
-                            y={avgVal}
-                            stroke={color}
-                            strokeDasharray="5 5"
-                            strokeWidth={2}
-                          />
-                        );
-                      })}
+
+                      {/* Subtle dashed average lines for active years */}
+                      {showAvgLines &&
+                        activeChartYears.map((year) => {
+                          const avgVal = yearAverages[year];
+                          if (!avgVal) return null;
+                          const color = yearColors[year] || '#64748b';
+                          const isHighlighted = hoveredChartYear === year;
+                          if (hoveredChartYear && !isHighlighted) return null;
+
+                          return (
+                            <ReferenceLine
+                              key={`ref-${year}`}
+                              y={avgVal}
+                              stroke={color}
+                              strokeDasharray="4 4"
+                              strokeWidth={isHighlighted ? 2.5 : 1.25}
+                              strokeOpacity={isHighlighted ? 0.95 : 0.45}
+                            />
+                          );
+                        })}
+
                       {data.availableYears
                         ?.filter((year) => activeChartYears.includes(year))
                         .map((year) => {
                           const color = yearColors[year] || '#64748b';
+                          const isDimmed = hoveredChartYear !== null && hoveredChartYear !== year;
                           return (
-                            <Bar 
-                              key={year} 
-                              dataKey={year} 
-                              fill={color} 
-                              radius={[4, 4, 0, 0]} 
-                              name={year} 
+                            <Bar
+                              key={year}
+                              dataKey={year}
+                              fill={color}
+                              fillOpacity={isDimmed ? 0.25 : 0.92}
+                              radius={[4, 4, 0, 0]}
+                              name={year}
+                              maxBarSize={22}
                             />
                           );
                         })}
@@ -809,11 +873,9 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="p-4 bg-slate-50 rounded-xl text-xs text-slate-600 flex items-center justify-between border border-slate-100">
-                <span>💡 <b>Berichtsfunktion:</b> Monatliche Zusammenfassungen automatisiert per Telegram oder E-Mail senden.</span>
-                <Link href="/reports" className="text-blue-600 font-bold hover:underline shrink-0">
-                  Konfigurieren →
-                </Link>
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                <span>💡 Tipp: Klicken Sie auf einen Monatsbalken, um direkt in die Monatsdetails zu wechseln.</span>
+                <span>Bewegen Sie die Maus über ein Jahr oben, um dessen Ø-Linie hervorzuheben.</span>
               </div>
             </div>
           </div>
