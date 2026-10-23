@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 
 interface Category {
   id: string;
@@ -373,13 +374,12 @@ export default function InvoicesPage() {
             {uploadingPdf ? '🔄 Lese PDF...' : '📥 PDF-Rechnung hochladen'}
           </label>
 
-          <button
-            type="button"
-            onClick={() => setShowSettings((prev) => !prev)}
-            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-semibold rounded-xl transition cursor-pointer"
+          <Link
+            href="/settings"
+            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs sm:text-sm font-semibold rounded-xl transition flex items-center gap-1.5"
           >
-            ⚙️ {showSettings ? 'Einstellungen schließen' : 'Gmail & KI einrichten'}
-          </button>
+            ⚙️ Einstellungen
+          </Link>
         </div>
       </div>
 
@@ -398,155 +398,6 @@ export default function InvoicesPage() {
           <button onClick={() => setStatusMsg(null)} className="font-bold opacity-60 hover:opacity-100 cursor-pointer">
             ✕
           </button>
-        </div>
-      )}
-
-      {/* Collapsible Setup Card for Gmail IMAP + Gemini API Key */}
-      {showSettings && (
-        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-6">
-          <div className="border-b border-slate-100 pb-4">
-            <h2 className="text-lg font-bold text-slate-900">⚙️ Einmalige Einrichtung: Gmail-Ordner & Gemini KI</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Ihre Zugangsdaten werden geschützt in Ihrer Datenbank gespeichert. Das Programm greift ausschließlich lesend auf Ihren angegebenen Rechnungs-Ordner zu.
-            </p>
-          </div>
-
-          <form onSubmit={handleSaveSettings} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Left Column: Gmail Setup */}
-              <div className="space-y-4 bg-slate-50 p-5 rounded-xl border border-slate-200/70">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-sm text-slate-900">1. Gmail-Verbindung (Ihr DATEV-Ordner)</h3>
-                  <a
-                    href="https://myaccount.google.com/apppasswords"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-blue-600 font-semibold hover:underline"
-                  >
-                    🔑 Google App-Passwort erstellen ↗
-                  </a>
-                </div>
-
-                <div className="text-xs text-slate-600 bg-white p-3 rounded-lg border border-slate-200/80 space-y-1">
-                  <p className="font-semibold text-slate-800">So funktioniert der Lesezugriff in 30 Sekunden:</p>
-                  <p>1. Klicken Sie oben rechts auf <b>„Google App-Passwort erstellen“</b>.</p>
-                  <p>2. Geben Sie als Name z. B. <i>„Kostenmanager“</i> ein und kopieren Sie den 16-stelligen Code.</p>
-                  <p>3. Klicken Sie unten auf <b>„📂 Ordner aus Gmail laden“</b> und wählen Sie Ihren DATEV-Ordner.</p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Ihre Gmail-Adresse</label>
-                  <input
-                    type="email"
-                    placeholder="z.B. hotel.schottenhof@gmail.com"
-                    value={gmailUser}
-                    onChange={(e) => setGmailUser(e.target.value)}
-                    className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-sm"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Google App-Passwort (16-stellig)
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="xxxx xxxx xxxx xxxx"
-                    value={gmailAppPassword}
-                    onChange={(e) => setGmailAppPassword(e.target.value)}
-                    className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Gmail-Ordner / Label mit den Rechnungen
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleLoadGmailFolders}
-                      disabled={loadingFolders}
-                      className="text-xs text-blue-600 font-bold hover:underline cursor-pointer"
-                    >
-                      {loadingFolders ? 'Lade Ordner...' : '📂 Ordner aus Gmail laden'}
-                    </button>
-                  </div>
-
-                  {availableFolders.length > 0 ? (
-                    <select
-                      value={gmailFolder}
-                      onChange={(e) => setGmailFolder(e.target.value)}
-                      className="w-full px-3.5 py-2 bg-white border border-blue-300 rounded-xl text-sm font-semibold text-slate-800"
-                    >
-                      {availableFolders.map((f) => (
-                        <option key={f.path} value={f.path}>
-                          📁 {f.name} ({f.path})
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="z.B. DATEV oder Rechnungen oder INBOX"
-                      value={gmailFolder}
-                      onChange={(e) => setGmailFolder(e.target.value)}
-                      className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-sm"
-                    />
-                  )}
-                </div>
-              </div>
-
-              {/* Right Column: Gemini AI Key */}
-              <div className="space-y-4 bg-slate-50 p-5 rounded-xl border border-slate-200/70 flex flex-col justify-between">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-bold text-sm text-slate-900">2. Google Gemini KI-Schlüssel (Kostenlos)</h3>
-                    <a
-                      href="https://aistudio.google.com/apikey"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-blue-600 font-semibold hover:underline"
-                    >
-                      ✨ Kostenlosen Gemini-Key holen ↗
-                    </a>
-                  </div>
-
-                  <div className="text-xs text-slate-600 bg-white p-3 rounded-lg border border-slate-200/80 space-y-1">
-                    <p className="font-semibold text-slate-800">Warum ein Gemini API-Key?</p>
-                    <p>
-                      • Mit Gemini 2.0 Flash liest die KI jede PDF-Rechnung (auch eingescannte Belege) wie ein Mensch und erkennt sofort Artikel wie <i>„20 Kartons Klopapier → Reinigung & Hygiene“</i>.
-                    </p>
-                    <p>• Der Schlüssel ist bei Google AI Studio <b>kostenlos</b> (bis zu 1.500 Belege pro Tag gratis).</p>
-                    <p>• Auch ohne Key ist bereits eine automatische Text- & Stichworterkennung aktiv.</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Gemini API-Key {hasEnvGeminiKey ? '(bereits in Server-Umgebung aktiv)' : ''}
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="AIzaSy..."
-                      value={geminiApiKey}
-                      onChange={(e) => setGeminiApiKey(e.target.value)}
-                      className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-4 border-t border-slate-200/70">
-                  <button
-                    type="submit"
-                    disabled={savingSettings}
-                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
-                  >
-                    {savingSettings ? 'Speichere...' : '💾 Einstellungen speichern'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </form>
         </div>
       )}
 
