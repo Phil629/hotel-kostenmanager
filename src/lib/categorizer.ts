@@ -185,20 +185,32 @@ export async function learnRuleFromAssignment(
       include: { category: true },
     });
 
+    // Gruppiere Treffer nach (categoryId, ruleId) für ein einziges schnelles Bulk-Update statt N Einzelabfragen
+    const grouped = new Map<string, { categoryId: string; ruleId: string | null; ids: string[] }>();
+
     for (const tx of uncategorized) {
       const match = await matchTransaction(tx.iban, tx.payee, tx.description, preloadedRules);
       if (match.status === 'CATEGORIZED' && match.categoryId) {
-        await prisma.transaction.update({
-          where: { id: tx.id },
-          data: {
-            categoryId: match.categoryId,
-            status: 'CATEGORIZED',
-            matchedRuleId: match.ruleId,
-          },
-        });
+        const key = `${match.categoryId}__${match.ruleId || ''}`;
+        const bucket = grouped.get(key) || { categoryId: match.categoryId, ruleId: match.ruleId, ids: [] };
+        bucket.ids.push(tx.id);
+        grouped.set(key, bucket);
         retroactivelyAppliedCount++;
       }
     }
+
+    await Promise.all(
+      Array.from(grouped.values()).map((b) =>
+        prisma.transaction.updateMany({
+          where: { id: { in: b.ids } },
+          data: {
+            categoryId: b.categoryId,
+            status: 'CATEGORIZED',
+            matchedRuleId: b.ruleId,
+          },
+        })
+      )
+    );
   }
 
   return {

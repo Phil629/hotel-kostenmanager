@@ -75,6 +75,14 @@ export default function Dashboard() {
   const [data, setData] = useState<StatsResponse | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Client-Cache für bereits geladene Zeiträume (0ms Wechsel zwischen Monaten/Jahren)
+  const statsCacheRef = useRef<Record<string, StatsResponse>>({});
+  const lastFetchTimeRef = useRef<number>(0);
+
+  // Limit für aufgeklappte Buchungen pro Kategorie (verhindert DOM-Verzögerung bei >100 Buchungen)
+  const [catRowLimits, setCatRowLimits] = useState<Record<string, number>>({});
 
   // Zeitraum wird seitenübergreifend gemerkt (gleicher Schlüssel wie auf der Umsätze-Seite)
   const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
@@ -212,14 +220,35 @@ export default function Dashboard() {
   };
 
   const fetchStats = async (monthVal = selectedMonth, silent = false) => {
-    if (!silent) setLoading(true);
+    const cached = statsCacheRef.current[monthVal];
+    if (!silent) {
+      if (cached) {
+        // 0ms Sofort-Wechsel aus dem Client-Cache, während im Hintergrund aktualisiert wird
+        setData(cached);
+        setCategoryOrder((cached.pieChartData || []).map((c) => c.id));
+        setMovedTx({});
+        setLoading(false);
+        setIsRefreshing(true);
+      } else if (data) {
+        // Bestehendes Layout sichtbar lassen statt weißen Ladebildschirm zu zeigen
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+    } else {
+      setIsRefreshing(true);
+    }
+
     try {
-      const res = await fetch(`/api/stats?month=${monthVal}&_t=${Date.now()}`, {
+      const res = await fetch(`/api/stats?month=${monthVal}`, {
         cache: 'no-store',
       });
       const json: StatsResponse = await res.json();
       // Während noch Umbuchungen laufen, keine (veralteten) Daten übernehmen
       if (silent && pendingRequests.current > 0) return;
+
+      statsCacheRef.current[monthVal] = json;
+      lastFetchTimeRef.current = Date.now();
       setData(json);
 
       const freshIds = (json.pieChartData || []).map((c) => c.id);
@@ -227,6 +256,7 @@ export default function Dashboard() {
         // Neuer Zeitraum: Reihenfolge nach Betrag neu festlegen, Platzhalter verwerfen
         setCategoryOrder(freshIds);
         setMovedTx({});
+        setCatRowLimits({});
       } else {
         // Hintergrund-Aktualisierung: Reihenfolge beibehalten, neue Kategorien hinten anhängen
         setCategoryOrder((prev) => [...prev, ...freshIds.filter((id) => !prev.includes(id))]);
@@ -234,17 +264,25 @@ export default function Dashboard() {
     } catch (e) {
       console.error('Error fetching stats:', e);
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
   useEffect(() => {
+    fetchCategories();
+  }, []);
+
+  useEffect(() => {
     if (!monthReady) return; // erst laden, wenn der gemerkte Zeitraum bekannt ist
     fetchStats(selectedMonth);
-    fetchCategories();
 
-    // Auto-refresh when tab or page regains focus
-    const handleFocus = () => fetchStats(selectedMonth, true);
+    // Auto-refresh when tab or page regains focus (gedrosselt auf mind. 30s Abstand)
+    const handleFocus = () => {
+      if (Date.now() - lastFetchTimeRef.current > 30000) {
+        fetchStats(selectedMonth, true);
+      }
+    };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [selectedMonth, monthReady]);
@@ -356,7 +394,12 @@ export default function Dashboard() {
     });
 
     // Sofortige lokale Aktualisierung (kein Ladeflackern, Reihenfolge bleibt)
-    setData((prev) => (prev ? moveTxLocally(prev, txId, newCategoryId) : prev));
+    setData((prev) => {
+      if (!prev) return prev;
+      const updated = moveTxLocally(prev, txId, newCategoryId);
+      statsCacheRef.current[selectedMonth] = updated;
+      return updated;
+    });
     setCategoryOrder((prev) => (prev.includes(newCategoryId) ? prev : [...prev, newCategoryId]));
 
     const newCatName =
@@ -468,6 +511,11 @@ export default function Dashboard() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
             <span>📅 Zeitraum auswählen:</span>
+            {isRefreshing && (
+              <span className="text-[11px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full animate-pulse">
+                Aktualisiere…
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -871,6 +919,7 @@ export default function Dashboard() {
                               radius={[4, 4, 0, 0]}
                               name={year}
                               maxBarSize={22}
+                              isAnimationActive={false}
                             />
                           );
                         })}
@@ -1009,99 +1058,117 @@ export default function Dashboard() {
                             Keine Buchungen in dieser Kategorie.
                           </div>
                         ) : (
-                          <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
-                            {rows.map(({ tx, moved }) => {
-                              const isGhost = !!moved;
-                              const justArrived = !isGhost && movedTx[tx.id]?.toCatId === cat.id;
-                              const targetCat = moved
-                                ? moved.toCatId === 'uncategorized'
-                                  ? { name: 'Unkategorisiert', color: '#94a3b8' }
-                                  : categories.find((c) => c.id === moved.toCatId) || { name: 'Neue Kategorie', color: '#94a3b8' }
-                                : null;
-                              return (
-                                <div
-                                  key={`${isGhost ? 'ghost' : 'tx'}-${tx.id}`}
-                                  className={`p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition ${
-                                    isGhost
-                                      ? 'bg-slate-50/80'
-                                      : justArrived
-                                      ? 'bg-emerald-50/60 border-l-4 border-emerald-400'
-                                      : 'hover:bg-slate-50'
-                                  }`}
-                                >
+                          <>
+                            <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
+                              {rows.slice(0, catRowLimits[cat.id] || 80).map(({ tx, moved }) => {
+                                const isGhost = !!moved;
+                                const justArrived = !isGhost && movedTx[tx.id]?.toCatId === cat.id;
+                                const targetCat = moved
+                                  ? moved.toCatId === 'uncategorized'
+                                    ? { name: 'Unkategorisiert', color: '#94a3b8' }
+                                    : categories.find((c) => c.id === moved.toCatId) || { name: 'Neue Kategorie', color: '#94a3b8' }
+                                  : null;
+                                return (
                                   <div
-                                    onClick={() => toggleTxTextExpand(tx.id)}
-                                    title="Klicken, um den gesamten Umsatztext ein- oder auszuklappen"
-                                    className={`space-y-1 flex-1 min-w-0 cursor-pointer select-text ${isGhost ? 'opacity-50' : ''}`}
+                                    key={`${isGhost ? 'ghost' : 'tx'}-${tx.id}`}
+                                    className={`p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition ${
+                                      isGhost
+                                        ? 'bg-slate-50/80'
+                                        : justArrived
+                                        ? 'bg-emerald-50/60 border-l-4 border-emerald-400'
+                                        : 'hover:bg-slate-50'
+                                    }`}
                                   >
-                                    <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
-                                      <span className={isGhost ? 'line-through' : ''}>{tx.payee || 'Unbekannter Empfänger'}</span>
-                                      {tx.iban && (
-                                        <span className="font-mono text-[11px] text-slate-400 font-normal">
-                                          ({tx.iban})
-                                        </span>
-                                      )}
-                                      {tx.description.length > 70 && !expandAllTxTexts && (
-                                        <span className="text-[11px] font-semibold text-blue-600 hover:underline">
-                                          {expandedTxIds.has(tx.id) ? '▲ Text einklappen' : '▼ Ganzen Text anzeigen'}
-                                        </span>
-                                      )}
-                                    </div>
                                     <div
-                                      className={`text-slate-600 text-xs leading-relaxed ${
-                                        expandAllTxTexts || expandedTxIds.has(tx.id)
-                                          ? 'whitespace-normal break-words bg-slate-50 p-2 rounded-lg border border-slate-200/80 text-slate-800'
-                                          : 'truncate'
-                                      }`}
+                                      onClick={() => toggleTxTextExpand(tx.id)}
+                                      title="Klicken, um den gesamten Umsatztext ein- oder auszuklappen"
+                                      className={`space-y-1 flex-1 min-w-0 cursor-pointer select-text ${isGhost ? 'opacity-50' : ''}`}
                                     >
-                                      {tx.description}
+                                      <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
+                                        <span className={isGhost ? 'line-through' : ''}>{tx.payee || 'Unbekannter Empfänger'}</span>
+                                        {tx.iban && (
+                                          <span className="font-mono text-[11px] text-slate-400 font-normal">
+                                            ({tx.iban})
+                                          </span>
+                                        )}
+                                        {tx.description.length > 70 && !expandAllTxTexts && (
+                                          <span className="text-[11px] font-semibold text-blue-600 hover:underline">
+                                            {expandedTxIds.has(tx.id) ? '▲ Text einklappen' : '▼ Ganzen Text anzeigen'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div
+                                        className={`text-slate-600 text-xs leading-relaxed ${
+                                          expandAllTxTexts || expandedTxIds.has(tx.id)
+                                            ? 'whitespace-normal break-words bg-slate-50 p-2 rounded-lg border border-slate-200/80 text-slate-800'
+                                            : 'truncate'
+                                        }`}
+                                      >
+                                        {tx.description}
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 font-mono">
+                                        Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
+                                      </div>
                                     </div>
-                                    <div className="text-[10px] text-slate-400 font-mono">
-                                      Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
-                                    </div>
-                                  </div>
 
-                                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
-                                    {isGhost && targetCat && (
-                                      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-600">
-                                        → <span className="w-2 h-2 rounded-full" style={{ backgroundColor: targetCat.color }} />
-                                        {targetCat.name}
+                                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                                      {isGhost && targetCat && (
+                                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-600">
+                                          → <span className="w-2 h-2 rounded-full" style={{ backgroundColor: targetCat.color }} />
+                                          {targetCat.name}
+                                        </span>
+                                      )}
+                                      {justArrived && (
+                                        <span className="text-[11px] font-semibold text-emerald-700">✓ neu zugeordnet</span>
+                                      )}
+                                      <span className={`font-extrabold text-sm text-slate-900 tabular-nums ${isGhost ? 'opacity-50' : ''}`}>
+                                        {formatEuro(tx.amount)}
                                       </span>
-                                    )}
-                                    {justArrived && (
-                                      <span className="text-[11px] font-semibold text-emerald-700">✓ neu zugeordnet</span>
-                                    )}
-                                    <span className={`font-extrabold text-sm text-slate-900 tabular-nums ${isGhost ? 'opacity-50' : ''}`}>
-                                      {formatEuro(tx.amount)}
-                                    </span>
 
-                                    {isGhost ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleRecategorizeTransaction(tx.id, cat.id)}
-                                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
-                                      >
-                                        ↩ Rückgängig
-                                      </button>
-                                    ) : (
-                                      <select
-                                        value={tx.categoryId || 'uncategorized'}
-                                        onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
-                                        className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                                      >
-                                        <option value="uncategorized">❓ Unkategorisiert</option>
-                                        {categories.map((c) => (
-                                          <option key={c.id} value={c.id}>
-                                            {c.name}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    )}
+                                      {isGhost ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRecategorizeTransaction(tx.id, cat.id)}
+                                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+                                        >
+                                          ↩ Rückgängig
+                                        </button>
+                                      ) : (
+                                        <select
+                                          value={tx.categoryId || 'uncategorized'}
+                                          onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
+                                          className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                                        >
+                                          <option value="uncategorized">❓ Unkategorisiert</option>
+                                          {categories.map((c) => (
+                                            <option key={c.id} value={c.id}>
+                                              {c.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      )}
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
+                                );
+                              })}
+                            </div>
+                            {rows.length > (catRowLimits[cat.id] || 80) && (
+                              <div className="text-center pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setCatRowLimits((prev) => ({
+                                      ...prev,
+                                      [cat.id]: (prev[cat.id] || 80) + 100,
+                                    }))
+                                  }
+                                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition cursor-pointer shadow-2xs"
+                                >
+                                  ➕ Weitere Buchungen anzeigen ({catRowLimits[cat.id] || 80} von {rows.length} sichtbar)
+                                </button>
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     )}

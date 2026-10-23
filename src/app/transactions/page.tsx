@@ -41,6 +41,9 @@ export default function TransactionsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [availableMonths, setAvailableMonths] = useState<MonthOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
+  const [visibleCount, setVisibleCount] = useState(100);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
@@ -48,8 +51,22 @@ export default function TransactionsPage() {
   const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
   const [selectedCategory, setSelectedCategory, categoryReady] = usePersistentState<string>('transactions.category', 'all');
   const [searchQuery, setSearchQuery, searchReady] = usePersistentState<string>('transactions.search', '');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [sortBy, setSortBy] = usePersistentState<SortOption>('transactions.sort', 'date_desc');
   const filtersReady = monthReady && categoryReady && searchReady;
+
+  // Entprellte Suche (250ms), damit nicht bei jedem Tastendruck eine DB-Abfrage ausgelöst wird
+  useEffect(() => {
+    if (!searchReady) return;
+    if (!searchQuery) {
+      setDebouncedSearch('');
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchReady]);
 
   // Bearbeitete Buchungen bleiben bis zum nächsten Filterwechsel sichtbar (kein "Wegspringen")
   const stickyIdsRef = useRef<Set<string>>(new Set());
@@ -96,16 +113,21 @@ export default function TransactionsPage() {
   };
 
   const fetchTransactions = async (silent = false) => {
-    if (!silent) setLoading(true);
+    if (!silent && !hasLoadedOnceRef.current) {
+      setLoading(true);
+    } else {
+      setIsFetching(true);
+    }
     try {
       const params = new URLSearchParams();
       if (selectedMonth !== 'all') params.set('month', selectedMonth);
       if (selectedCategory !== 'all') params.set('categoryId', selectedCategory);
-      if (searchQuery) params.set('search', searchQuery);
+      if (debouncedSearch) params.set('search', debouncedSearch);
 
       const res = await fetch(`/api/transactions?${params.toString()}`);
       const data = await res.json();
       const fetched: Transaction[] = data.transactions || [];
+      hasLoadedOnceRef.current = true;
       if (silent) {
         // Bereits bearbeitete Buchungen, die nicht mehr zum Filter passen, sichtbar lassen
         setTransactions((prev) => {
@@ -122,7 +144,8 @@ export default function TransactionsPage() {
     } catch (e) {
       console.error(e);
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
+      setIsFetching(false);
     }
   };
 
@@ -133,9 +156,10 @@ export default function TransactionsPage() {
   useEffect(() => {
     if (!filtersReady) return; // erst laden, wenn gemerkte Filter bekannt sind
     stickyIdsRef.current = new Set();
+    setVisibleCount(100);
     fetchTransactions(false);
     setSelectedTxIds(new Set());
-  }, [selectedMonth, selectedCategory, searchQuery, filtersReady]);
+  }, [selectedMonth, selectedCategory, debouncedSearch, filtersReady]);
 
   // Passt eine (bearbeitete) Buchung noch zum aktiven Kategorie-Filter?
   const matchesCategoryFilter = (tx: Transaction) => {
@@ -168,6 +192,11 @@ export default function TransactionsPage() {
         return list.sort((a, b) => byDate(b, a) || b.id.localeCompare(a.id));
     }
   }, [transactions, sortBy]);
+
+  const visibleTransactions = useMemo(
+    () => sortedTransactions.slice(0, visibleCount),
+    [sortedTransactions, visibleCount]
+  );
 
   const toggleSort = (column: 'date' | 'amount') => {
     if (column === 'date') setSortBy(sortBy === 'date_desc' ? 'date_asc' : 'date_desc');
@@ -552,7 +581,7 @@ export default function TransactionsPage() {
       {/* Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col lg:flex-row gap-4 items-center justify-between">
         {/* Search */}
-        <div className="flex items-center gap-3 w-full lg:w-72">
+        <div className="flex items-center gap-3 w-full lg:w-80">
           <input
             type="text"
             placeholder="🔍 Nach Lieferant (z.B. PayPal), IBAN..."
@@ -560,6 +589,11 @@ export default function TransactionsPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {isFetching && (
+            <span className="text-[11px] font-medium text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full animate-pulse shrink-0">
+              Lade…
+            </span>
+          )}
         </div>
 
         {/* Filters: Month & Category */}
@@ -681,7 +715,7 @@ export default function TransactionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {sortedTransactions.map((tx) => {
+                {visibleTransactions.map((tx) => {
                   const isChecked = selectedTxIds.has(tx.id);
                   const isDoneHere = stickyIdsRef.current.has(tx.id) && !matchesCategoryFilter(tx);
                   return (
@@ -785,6 +819,30 @@ export default function TransactionsPage() {
                 })}
               </tbody>
             </table>
+
+            {sortedTransactions.length > visibleCount && (
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+                <span>
+                  Zeige <b>{visibleCount}</b> von insgesamt <b>{sortedTransactions.length}</b> Umsätzen
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((prev) => prev + 150)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-2xs transition cursor-pointer"
+                  >
+                    ➕ Weitere 150 Umsätze anzeigen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount(sortedTransactions.length)}
+                    className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl border border-slate-200 transition cursor-pointer"
+                  >
+                    Alle ({sortedTransactions.length}) laden
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

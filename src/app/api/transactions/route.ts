@@ -31,35 +31,7 @@ export async function GET(req: NextRequest) {
     const search = searchParams.get('search');
     const month = searchParams.get('month'); // YYYY-MM
 
-    // Fetch ALL negative transactions to build dynamic availableMonths list
-    const allExpenses = await prisma.transaction.findMany({
-      where: { amount: { lt: 0 } },
-      select: { date: true },
-      orderBy: { date: 'desc' },
-    });
-
-    const monthsSet = new Set<string>();
-    const yearsSet = new Set<string>();
-    for (const t of allExpenses) {
-      const dateObj = new Date(t.date);
-      const y = String(dateObj.getUTCFullYear());
-      const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
-      monthsSet.add(ym);
-      yearsSet.add(y);
-    }
-
-    const availableMonths: any[] = [];
-    const sortedYears = Array.from(yearsSet).sort().reverse();
-    for (const y of sortedYears) {
-      availableMonths.push({ value: y, label: `📅 Gesamtes Jahr ${y}` });
-      const monthsInYear = Array.from(monthsSet).filter(ym => ym.startsWith(y)).sort().reverse();
-      for (const ym of monthsInYear) {
-        const m = ym.split('-')[1];
-        availableMonths.push({ value: ym, label: `   ↳ ${monthNamesGerman[m] || m} ${y}` });
-      }
-    }
-
-    // Build filter clause
+    // Build filter clause first so both DB queries run in parallel
     const whereClause: any = {
       amount: { lt: 0 },
     };
@@ -76,13 +48,14 @@ export async function GET(req: NextRequest) {
       whereClause.status = status;
     }
 
-    if (search) {
+    if (search && search.trim()) {
+      const q = search.trim();
       whereClause.AND = [
         {
           OR: [
-            { payee: { contains: search } },
-            { description: { contains: search } },
-            { iban: { contains: search } },
+            { payee: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
+            { iban: { contains: q, mode: 'insensitive' } },
           ],
         },
       ];
@@ -104,16 +77,44 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const transactions = await prisma.transaction.findMany({
-      where: whereClause,
-      include: {
-        category: true,
-        matchedRule: {
-          include: { category: true },
+    const [allExpenses, transactions] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { amount: { lt: 0 } },
+        select: { date: true },
+        orderBy: { date: 'desc' },
+      }),
+      prisma.transaction.findMany({
+        where: whereClause,
+        include: {
+          category: true,
+          matchedRule: {
+            include: { category: true },
+          },
         },
-      },
-      orderBy: { date: 'desc' },
-    });
+        orderBy: { date: 'desc' },
+      }),
+    ]);
+
+    const monthsSet = new Set<string>();
+    const yearsSet = new Set<string>();
+    for (const t of allExpenses) {
+      const dateObj = new Date(t.date);
+      const y = String(dateObj.getUTCFullYear());
+      const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
+      monthsSet.add(ym);
+      yearsSet.add(y);
+    }
+
+    const availableMonths: any[] = [];
+    const sortedYears = Array.from(yearsSet).sort().reverse();
+    for (const y of sortedYears) {
+      availableMonths.push({ value: y, label: `📅 Gesamtes Jahr ${y}` });
+      const monthsInYear = Array.from(monthsSet).filter((ym) => ym.startsWith(y)).sort().reverse();
+      for (const ym of monthsInYear) {
+        const m = ym.split('-')[1];
+        availableMonths.push({ value: ym, label: `   ↳ ${monthNamesGerman[m] || m} ${y}` });
+      }
+    }
 
     const totalCount = transactions.length;
     const uncategorizedCount = transactions.filter((t) => t.status === 'UNCATEGORIZED').length;

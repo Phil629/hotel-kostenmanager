@@ -6,16 +6,26 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const rules = await prisma.rule.findMany({
-      include: { category: true },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const transactions = await prisma.transaction.findMany({
-      where: { amount: { lt: 0 } },
-      include: { category: true },
-      orderBy: { date: 'desc' },
-    });
+    const [rules, transactions] = await Promise.all([
+      prisma.rule.findMany({
+        include: { category: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.transaction.findMany({
+        where: { amount: { lt: 0 } },
+        select: {
+          id: true,
+          date: true,
+          amount: true,
+          payee: true,
+          iban: true,
+          description: true,
+          status: true,
+          category: { select: { id: true, name: true, color: true } },
+        },
+        orderBy: { date: 'desc' },
+      }),
+    ]);
 
     const rulesWithMatches = rules.map((rule) => {
       const patternLower = (rule.pattern || '').toLowerCase().trim();
@@ -85,6 +95,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      const matchedIds: string[] = [];
       for (const t of openTxs) {
         let isMatch = false;
         if (matchType === 'IBAN') {
@@ -103,16 +114,20 @@ export async function POST(req: NextRequest) {
         }
 
         if (isMatch) {
-          await prisma.transaction.update({
-            where: { id: t.id },
-            data: {
-              categoryId,
-              status: 'CATEGORIZED',
-              matchedRuleId: rule.id,
-            },
-          });
-          appliedCount++;
+          matchedIds.push(t.id);
         }
+      }
+
+      if (matchedIds.length > 0) {
+        const res = await prisma.transaction.updateMany({
+          where: { id: { in: matchedIds } },
+          data: {
+            categoryId,
+            status: 'CATEGORIZED',
+            matchedRuleId: rule.id,
+          },
+        });
+        appliedCount = res.count;
       }
     }
 

@@ -7,14 +7,52 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const month = searchParams.get('month'); // YYYY-MM or 'all'
+    const month = searchParams.get('month'); // YYYY-MM, YYYY, or 'all'
 
-    // Fetch ALL transactions for the bar chart and available months list
-    const allTransactions = await prisma.transaction.findMany({
-      where: { amount: { lt: 0 } },
-      include: { category: true },
-      orderBy: { date: 'desc' },
-    });
+    // Build date filter for the active period
+    const periodWhere: any = { amount: { lt: 0 } };
+    if (month && month !== 'all') {
+      if (month.length === 4) {
+        const year = parseInt(month, 10);
+        periodWhere.date = {
+          gte: new Date(Date.UTC(year, 0, 1)),
+          lt: new Date(Date.UTC(year + 1, 0, 1)),
+        };
+      } else {
+        const [yearStr, monthStr] = month.split('-');
+        const year = parseInt(yearStr, 10);
+        const m = parseInt(monthStr, 10) - 1;
+        periodWhere.date = {
+          gte: new Date(Date.UTC(year, m, 1)),
+          lt: new Date(Date.UTC(year, m + 1, 1)),
+        };
+      }
+    }
+
+    // Run lightweight 4-year overview query + detailed period query in parallel
+    const [allDatesAndAmounts, filteredTransactions] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { amount: { lt: 0 } },
+        select: { date: true, amount: true },
+        orderBy: { date: 'desc' },
+      }),
+      prisma.transaction.findMany({
+        where: periodWhere,
+        select: {
+          id: true,
+          date: true,
+          payee: true,
+          iban: true,
+          description: true,
+          amount: true,
+          categoryId: true,
+          category: {
+            select: { id: true, name: true, color: true },
+          },
+        },
+        orderBy: { date: 'desc' },
+      }),
+    ]);
 
     const monthNamesGerman: Record<string, string> = {
       '01': 'Januar',
@@ -33,34 +71,26 @@ export async function GET(req: NextRequest) {
 
     const monthsSet = new Set<string>();
     const yearsSet = new Set<string>();
-    for (const t of allTransactions) {
+    const monthlyTotalsCentsMap: Record<string, number> = {};
+
+    for (const t of allDatesAndAmounts) {
       const dateObj = new Date(t.date);
       const y = String(dateObj.getUTCFullYear());
       const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
       monthsSet.add(ym);
       yearsSet.add(y);
+      monthlyTotalsCentsMap[ym] = (monthlyTotalsCentsMap[ym] || 0) + Math.round(Math.abs(t.amount) * 100);
     }
 
     const availableMonths: any[] = [];
     const sortedYears = Array.from(yearsSet).sort().reverse();
     for (const y of sortedYears) {
       availableMonths.push({ value: y, label: `📅 Gesamtes Jahr ${y}` });
-      const monthsInYear = Array.from(monthsSet).filter(ym => ym.startsWith(y)).sort().reverse();
+      const monthsInYear = Array.from(monthsSet).filter((ym) => ym.startsWith(y)).sort().reverse();
       for (const ym of monthsInYear) {
         const m = ym.split('-')[1];
         availableMonths.push({ value: ym, label: `   ↳ ${monthNamesGerman[m] || m} ${y}` });
       }
-    }
-
-    // Apply month/year filter to statistics & pie chart
-    let filteredTransactions = allTransactions;
-    if (month && month !== 'all') {
-      filteredTransactions = allTransactions.filter((t) => {
-        const dateObj = new Date(t.date);
-        const y = String(dateObj.getUTCFullYear());
-        const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
-        return month.length === 4 ? y === month : ym === month;
-      });
     }
 
     const totalExpenseCents = filteredTransactions.reduce((acc, t) => acc + Math.round(Math.abs(t.amount) * 100), 0);
@@ -123,14 +153,6 @@ export async function GET(req: NextRequest) {
       }))
       .sort((a, b) => b.amount - a.amount);
 
-    // Build Bar Chart data across ALL months always
-    const monthlyTotalsCentsMap: Record<string, number> = {};
-    for (const t of allTransactions) {
-      const dateObj = new Date(t.date);
-      const ym = `${dateObj.getUTCFullYear()}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
-      monthlyTotalsCentsMap[ym] = (monthlyTotalsCentsMap[ym] || 0) + Math.round(Math.abs(t.amount) * 100);
-    }
-
     const shortMonthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
     const barChartData = shortMonthNames.map((name, index) => {
       const mStr = String(index + 1).padStart(2, '0');
@@ -142,23 +164,21 @@ export async function GET(req: NextRequest) {
       return dataPoint;
     });
 
-    const fnbTotal = pieChartData
-      .filter((p) => p.name.includes('F&B'))
-      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
+    const fnbTotal =
+      pieChartData.filter((p) => p.name.includes('F&B')).reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
-    const energyTotal = pieChartData
-      .filter((p) => p.name.includes('Energie'))
-      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
+    const energyTotal =
+      pieChartData.filter((p) => p.name.includes('Energie')).reduce((acc, p) => acc + Math.round(p.amount * 100), 0) /
+      100;
 
-    const otaTotal = pieChartData
-      .filter((p) => p.name.includes('OTA'))
-      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
+    const otaTotal =
+      pieChartData.filter((p) => p.name.includes('OTA')).reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
-    const uncategorizedAmount = pieChartData
-      .filter((p) => p.name === 'Unkategorisiert')
-      .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
+    const uncategorizedAmount =
+      pieChartData
+        .filter((p) => p.name === 'Unkategorisiert')
+        .reduce((acc, p) => acc + Math.round(p.amount * 100), 0) / 100;
 
-    // We also need to send back the sortedYears so the frontend knows which bars to render
     return NextResponse.json(
       {
         summary: {
