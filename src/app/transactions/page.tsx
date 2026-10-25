@@ -118,12 +118,13 @@ export default function TransactionsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
-  // Filters (werden seitenübergreifend gemerkt; Monat wird mit dem Dashboard geteilt)
-  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
+  // Filters (werden seitenübergreifend gemerkt; Monat wird mit dem Dashboard & HeaderNav geteilt)
+  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.period', 'latest');
   const [selectedCategory, setSelectedCategory, categoryReady] = usePersistentState<string>('transactions.category', 'all');
   const [searchQuery, setSearchQuery, searchReady] = usePersistentState<string>('transactions.search', '');
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [sortBy, setSortBy] = usePersistentState<SortOption>('transactions.sort', 'date_desc');
+  const [, setGlobalAvailableMonths] = usePersistentState<MonthOption[]>('filter.availableMonths', []);
   const filtersReady = monthReady && categoryReady && searchReady;
 
   // Entprellte Suche (250ms), damit nicht bei jedem Tastendruck eine DB-Abfrage ausgelöst wird
@@ -223,6 +224,10 @@ export default function TransactionsPage() {
       }
       if (data.availableMonths) {
         setAvailableMonths(data.availableMonths);
+        setGlobalAvailableMonths(data.availableMonths);
+      }
+      if (selectedMonth === 'latest' && data.resolvedMonth) {
+        setSelectedMonth(data.resolvedMonth);
       }
       if (data.stats) {
         setPeriodStats({

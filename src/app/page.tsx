@@ -84,8 +84,9 @@ export default function Dashboard() {
   // Limit für aufgeklappte Buchungen pro Kategorie (verhindert DOM-Verzögerung bei >100 Buchungen)
   const [catRowLimits, setCatRowLimits] = useState<Record<string, number>>({});
 
-  // Zeitraum wird seitenübergreifend gemerkt (gleicher Schlüssel wie auf der Umsätze-Seite)
-  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.month', 'all');
+  // Zeitraum wird seitenübergreifend gemerkt (gleicher Schlüssel wie in HeaderNav und auf der Umsätze-Seite)
+  const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.period', 'latest');
+  const [, setAvailableMonths] = usePersistentState<Array<{ value: string; label: string }>>('filter.availableMonths', []);
 
   // Aufgeklappte Kategorien werden ebenfalls gemerkt
   const [expandedCatList, setExpandedCatList] = usePersistentState<string[]>('dashboard.expandedCats', []);
@@ -250,6 +251,13 @@ export default function Dashboard() {
       statsCacheRef.current[monthVal] = json;
       lastFetchTimeRef.current = Date.now();
       setData(json);
+
+      if (json.availableMonths) {
+        setAvailableMonths(json.availableMonths);
+      }
+      if (monthVal === 'latest' && (json as any).resolvedMonth) {
+        setSelectedMonth((json as any).resolvedMonth);
+      }
 
       const freshIds = (json.pieChartData || []).map((c) => c.id);
       if (!silent) {
@@ -475,21 +483,43 @@ export default function Dashboard() {
     return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
   };
 
+  const formatPeriodLabel = (val: string): string => {
+    if (!val || val === 'latest') return 'Letzter Monat';
+    if (val === 'all') return 'Alle 4 Jahre';
+    if (/^\d{4}$/.test(val)) return `Ganzes Jahr ${val}`;
+    if (/^\d{4}-\d{2}$/.test(val)) {
+      const [y, m] = val.split('-');
+      return `${shortGermanMonths[m] || m} ${y}`;
+    }
+    return val;
+  };
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Header & Quick Actions */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Hotel Kosten- & Statistik-Dashboard</h1>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Hotel Kosten- & Statistik-Dashboard</h1>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-white text-slate-800 border border-slate-200 shadow-2xs">
+              <span className="text-blue-600">📅</span>
+              <span>{formatPeriodLabel(selectedMonth)}</span>
+            </span>
+            {isRefreshing && (
+              <span className="text-[11px] font-medium text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-full animate-pulse">
+                Aktualisiere…
+              </span>
+            )}
+          </div>
           <p className="text-slate-500 text-sm mt-1">
-            Finanzübersicht & Auswertung des City Hotel Schottenhof (Echtzeit-Aktualisierung)
+            Finanzübersicht & Auswertung des City Hotel Schottenhof • Zeitraum oben in der Leiste änderbar
           </p>
         </div>
 
         <div className="flex items-center gap-3">
           <Link
             href="/transactions"
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-xl shadow-xs transition flex items-center gap-2"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-xs transition flex items-center gap-2"
           >
             ➕ Kontoauszug hochladen
           </Link>
@@ -504,111 +534,6 @@ export default function Dashboard() {
           </button>
         </div>
       )}
-
-      {/* Sleek Hierarchical Time & Year/Month Filter */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        {/* Step 1: Quick Year Tabs */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
-            <span>📅 Zeitraum auswählen:</span>
-            {isRefreshing && (
-              <span className="text-[11px] font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full animate-pulse">
-                Aktualisiere…
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => {
-                setSelectedMonth('all');
-              }}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                activeFilterYear === 'all' && selectedMonth === 'all'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <span>📊</span>
-              <span>Alle 4 Jahre</span>
-            </button>
-
-            {data?.availableYears?.map((year) => {
-              const isYearActive = activeFilterYear === year;
-              return (
-                <button
-                  key={year}
-                  onClick={() => {
-                    setSelectedMonth(year);
-                  }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                    isYearActive
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  <span>📅</span>
-                  <span>{year}</span>
-                  {year === '2026' && (
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                      Aktuell
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Step 2: Specific Month Selector for the active year */}
-        {activeFilterYear !== 'all' ? (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-            <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
-              <span>Monate im Jahr <b>{activeFilterYear}</b>:</span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                onClick={() => setSelectedMonth(activeFilterYear)}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                  selectedMonth === activeFilterYear
-                    ? 'bg-blue-600 text-white shadow-2xs'
-                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
-                }`}
-              >
-                📌 Ganzes Jahr {activeFilterYear}
-              </button>
-
-              {data?.availableMonths
-                ?.filter((m) => m.value.startsWith(`${activeFilterYear}-`))
-                .sort((a, b) => a.value.localeCompare(b.value))
-                .map((m) => {
-                  const isSelected = selectedMonth === m.value;
-                  const monthNum = m.value.split('-')[1];
-                  const monthName = shortGermanMonths[monthNum] || monthNum;
-                  return (
-                    <button
-                      key={m.value}
-                      onClick={() => setSelectedMonth(m.value)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                        isSelected
-                          ? 'bg-blue-600 text-white shadow-2xs font-bold'
-                          : 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
-                      }`}
-                    >
-                      {monthName}
-                    </button>
-                  );
-                })}
-            </div>
-          </div>
-        ) : (
-          <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
-            <span>💡 <i>Wählen Sie oben ein einzelnes Jahr aus (z. B. 2026), um die einzelnen Monate aufzurufen.</i></span>
-            <span className="font-semibold text-slate-700">Gesamtauswertung aller Buchungen (2023–2026)</span>
-          </div>
-        )}
-      </div>
 
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">

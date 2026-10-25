@@ -7,7 +7,22 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const month = searchParams.get('month'); // YYYY-MM, YYYY, or 'all'
+    let month = searchParams.get('month'); // YYYY-MM, YYYY, 'latest', or 'all'
+
+    // Bei "latest" (Standard beim Programmstart) automatisch den neuesten vorhandenen Monat ermitteln
+    if (!month || month === 'latest') {
+      const newestTx = await prisma.transaction.findFirst({
+        where: { amount: { lt: 0 } },
+        select: { date: true },
+        orderBy: { date: 'desc' },
+      });
+      if (newestTx) {
+        const d = new Date(newestTx.date);
+        month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      } else {
+        month = 'all';
+      }
+    }
 
     // Build date filter for the active period
     const periodWhere: any = { amount: { lt: 0 } };
@@ -191,6 +206,7 @@ export async function GET(req: NextRequest) {
         },
         availableMonths,
         availableYears: sortedYears,
+        resolvedMonth: month,
         pieChartData,
         barChartData,
       },

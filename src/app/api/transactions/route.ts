@@ -29,7 +29,21 @@ export async function GET(req: NextRequest) {
     const categoryId = searchParams.get('categoryId');
     const status = searchParams.get('status');
     const search = searchParams.get('search');
-    const month = searchParams.get('month'); // YYYY-MM
+    let month = searchParams.get('month'); // YYYY-MM, YYYY, 'latest', or 'all'
+
+    if (!month || month === 'latest') {
+      const newestTx = await prisma.transaction.findFirst({
+        where: { amount: { lt: 0 } },
+        select: { date: true },
+        orderBy: { date: 'desc' },
+      });
+      if (newestTx) {
+        const d = new Date(newestTx.date);
+        month = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      } else {
+        month = 'all';
+      }
+    }
 
     // Build filter clause first so both DB queries run in parallel
     const whereClause: any = {
@@ -138,6 +152,7 @@ export async function GET(req: NextRequest) {
       {
         transactions,
         availableMonths,
+        resolvedMonth: month,
         stats: {
           totalCount,
           uncategorizedCount,
