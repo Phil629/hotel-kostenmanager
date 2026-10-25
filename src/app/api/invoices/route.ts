@@ -64,6 +64,42 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true });
       }
 
+      if (body.action === 'updateInvoice' && body.invoiceId) {
+        const nextCatId = body.suggestedCategoryId ? body.suggestedCategoryId : null;
+        const parsedAmount =
+          body.grossAmount !== undefined && body.grossAmount !== null && body.grossAmount !== ''
+            ? parseFloat(String(body.grossAmount).replace(',', '.'))
+            : null;
+        const validAmount = parsedAmount !== null && !isNaN(parsedAmount) ? Math.abs(parsedAmount) : null;
+
+        const inv = await prisma.invoice.update({
+          where: { id: body.invoiceId },
+          data: {
+            vendorName: body.vendorName?.trim() || null,
+            invoiceNumber: body.invoiceNumber?.trim() || null,
+            invoiceDate: body.invoiceDate ? new Date(body.invoiceDate) : null,
+            grossAmount: validAmount,
+            itemsSummary: body.itemsSummary?.trim() || null,
+            paymentMethod: body.paymentMethod?.trim() || null,
+            suggestedCategoryId: nextCatId,
+          },
+        });
+
+        if (inv.matchedTransactionId) {
+          await prisma.transaction.update({
+            where: { id: inv.matchedTransactionId },
+            data: {
+              categoryId: nextCatId,
+              status: nextCatId ? 'CATEGORIZED' : 'UNCATEGORIZED',
+            },
+          });
+        } else {
+          await matchInvoiceToTransaction(inv.id);
+        }
+
+        return NextResponse.json({ success: true });
+      }
+
       return NextResponse.json({ error: 'Unbekannte Aktion' }, { status: 400 });
     }
 
