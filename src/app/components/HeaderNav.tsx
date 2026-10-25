@@ -30,7 +30,7 @@ const GERMAN_MONTHS: Record<string, string> = {
   '12': 'Dezember',
 };
 
-const SHORT_GERMAN_MONTHS: Record<string, string> = {
+const SHORT_MONTHS: Record<string, string> = {
   '01': 'Jan',
   '02': 'Feb',
   '03': 'Mär',
@@ -56,7 +56,6 @@ export default function HeaderNav() {
   const [availableMonths, setAvailableMonths] = usePersistentState<MonthOption[]>('filter.availableMonths', []);
 
   const [openDropdown, setOpenDropdown] = useState(false);
-  const [viewYear, setViewYear] = useState<string>('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Nur echte Monate (YYYY-MM) absteigend sortiert (neuester Monat zuerst)
@@ -69,7 +68,7 @@ export default function HeaderNav() {
     [availableMonths]
   );
 
-  // Alle verfügbaren Jahre (YYYY) absteigend sortiert (z. B. ['2026', '2025', '2024', '2023'])
+  // Alle verfügbaren Jahre (z. B. ['2026', '2025', '2024', '2023'])
   const availableYears = useMemo(() => {
     const set = new Set<string>();
     for (const m of availableMonths) {
@@ -82,12 +81,7 @@ export default function HeaderNav() {
 
   const latestMonthValue = onlyMonthsDesc[0] || '2026-08';
 
-  // Aktives Jahr: Entweder was der Nutzer im Popover anklickt, oder das Jahr des aktuell gewählten Zeitraums
-  const activeYear =
-    viewYear ||
-    (/^\d{4}/.test(selectedMonth) ? selectedMonth.slice(0, 4) : availableYears[0] || '2026');
-
-  // Falls "latest" noch nicht aufgelöst ist, sobald availableMonths vorliegt auf den neuesten Monat setzen
+  // Falls "latest" noch nicht aufgelöst ist, auf neuesten Monat setzen
   useEffect(() => {
     if (!monthReady) return;
     if (selectedMonth === 'latest' && onlyMonthsDesc.length > 0) {
@@ -95,7 +89,7 @@ export default function HeaderNav() {
     }
   }, [monthReady, selectedMonth, onlyMonthsDesc, setSelectedMonth]);
 
-  // Falls auf einer Seite gestartet wird, die selbst keine availableMonths lädt, einmalig im Hintergrund abrufen
+  // Falls auf einer Unterseite gestartet wird, availableMonths im Hintergrund laden
   useEffect(() => {
     if (!monthReady || pathname === '/login') return;
     if (availableMonths.length > 0 && selectedMonth !== 'latest') return;
@@ -113,7 +107,7 @@ export default function HeaderNav() {
       .catch(() => {});
   }, [monthReady, pathname, availableMonths.length, selectedMonth, setAvailableMonths, setSelectedMonth]);
 
-  // Klick außerhalb schließt das Popover
+  // Klick außerhalb schließt Popover
   useEffect(() => {
     if (!openDropdown) return;
     const handleClickOutside = (e: MouseEvent) => {
@@ -136,7 +130,7 @@ export default function HeaderNav() {
     return null;
   }
 
-  // Formatierte Anzeige des aktuell gewählten Zeitraums im Haupt-Button
+  // Label für den Hauptbutton in der Leiste
   const formatPeriodLabel = (val: string): string => {
     if (!val || val === 'latest') {
       if (latestMonthValue) {
@@ -146,7 +140,7 @@ export default function HeaderNav() {
       return 'Neuester Monat';
     }
     if (val === 'all') return 'Alle 4 Jahre';
-    if (/^\d{4}$/.test(val)) return `Ganzes Jahr ${val}`;
+    if (/^\d{4}$/.test(val)) return `Jahr ${val}`;
     if (/^\d{4}-\d{2}$/.test(val)) {
       const [y, m] = val.split('-');
       return `${GERMAN_MONTHS[m] || m} ${y}`;
@@ -154,7 +148,7 @@ export default function HeaderNav() {
     return val;
   };
 
-  // Vorheriger / Nächster Monat Navigation (hängt NIEMALS)
+  // Pfeil-Navigation (schaltet weiter und friert niemals ein)
   const handleStepPrev = () => {
     if (/^\d{4}-\d{2}$/.test(selectedMonth)) {
       const idx = onlyMonthsDesc.indexOf(selectedMonth);
@@ -168,13 +162,7 @@ export default function HeaderNav() {
         setSelectedMonth(availableYears[yIdx + 1]);
         return;
       }
-    } else if (selectedMonth === 'all') {
-      if (availableYears.length > 0) {
-        setSelectedMonth(availableYears[0]);
-        return;
-      }
     }
-    // Fallback: Ältester Monat
     if (onlyMonthsDesc.length > 0) {
       setSelectedMonth(onlyMonthsDesc[onlyMonthsDesc.length - 1]);
     }
@@ -194,13 +182,11 @@ export default function HeaderNav() {
         return;
       }
     }
-    // Fallback: Neuester Monat
     if (latestMonthValue) {
       setSelectedMonth(latestMonthValue);
     }
   };
 
-  // Prüfen ob am Rand
   const isAtOldest =
     /^\d{4}-\d{2}$/.test(selectedMonth) &&
     onlyMonthsDesc.indexOf(selectedMonth) === onlyMonthsDesc.length - 1;
@@ -208,21 +194,17 @@ export default function HeaderNav() {
     /^\d{4}-\d{2}$/.test(selectedMonth) &&
     onlyMonthsDesc.indexOf(selectedMonth) === 0;
 
-  // Alle Monate im aktiven Jahr (geordnet von Jan bis Dez)
-  const monthsInActiveYear = [
-    '01', '02', '03', '04', '05', '06',
-    '07', '08', '09', '10', '11', '12',
-  ].map((m) => {
-    const ym = `${activeYear}-${m}`;
-    const hasData = onlyMonthsDesc.includes(ym);
-    return { ym, m, hasData };
-  });
+  // 1-Klick Auswahl eines Zeitraums mit sofortigem Schließen
+  const selectAndClose = (val: string) => {
+    setSelectedMonth(val);
+    setOpenDropdown(false);
+  };
 
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800/80 sticky top-0 z-40 shadow-xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-13 flex items-center justify-between gap-3">
         {/* Left: Logo + Globaler Zeitraum-Filter */}
-        <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
           <Link href="/" className="flex items-center gap-2 shrink-0 group">
             <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-sm shadow-xs group-hover:bg-blue-500 transition-colors">
               🏨
@@ -234,7 +216,7 @@ export default function HeaderNav() {
 
           <div className="h-4 w-px bg-slate-800 hidden sm:block" />
 
-          {/* Globaler Zeitraum-Wähler in der oberen Leiste */}
+          {/* Zeitraum-Wähler */}
           <div className="relative" ref={dropdownRef}>
             <div className="inline-flex items-center bg-slate-800/95 border border-slate-700 rounded-xl p-0.5 shadow-2xs">
               <button
@@ -242,19 +224,16 @@ export default function HeaderNav() {
                 disabled={isAtOldest}
                 onClick={handleStepPrev}
                 className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700/80 rounded-lg transition disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-                title="Vorheriger Monat / Vorheriges Jahr"
+                title="Vorheriger Monat"
               >
                 ◀
               </button>
 
               <button
                 type="button"
-                onClick={() => {
-                  setViewYear(/^\d{4}/.test(selectedMonth) ? selectedMonth.slice(0, 4) : availableYears[0]);
-                  setOpenDropdown((prev) => !prev);
-                }}
+                onClick={() => setOpenDropdown((prev) => !prev)}
                 className="px-2.5 py-1 text-xs font-bold text-white hover:bg-slate-700/80 rounded-lg transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-                title="Zeitraum für Dashboard & Umsätze auswählen"
+                title="Zeitraum auswählen"
               >
                 <span className="text-blue-400">📅</span>
                 <span>{formatPeriodLabel(selectedMonth)}</span>
@@ -271,23 +250,20 @@ export default function HeaderNav() {
                 disabled={isAtNewest}
                 onClick={handleStepNext}
                 className="px-2 py-1 text-xs text-slate-300 hover:text-white hover:bg-slate-700/80 rounded-lg transition disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
-                title="Nächster Monat / Nächstes Jahr"
+                title="Nächster Monat"
               >
                 ▶
               </button>
             </div>
 
-            {/* Popover-Menü für Jahr & Monat */}
+            {/* Popover-Menü mit 1-Klick-Auswahl */}
             {openDropdown && (
-              <div className="absolute left-0 mt-2 w-84 sm:w-96 bg-slate-900 border border-slate-700/90 rounded-2xl shadow-2xl p-4 z-50 space-y-4 animate-in fade-in zoom-in-95 duration-100">
-                {/* 1. Schnellauswahl: Neueste Buchungen vs. Alle Jahre */}
-                <div className="grid grid-cols-2 gap-2 pb-3 border-b border-slate-800">
+              <div className="absolute left-0 mt-2 w-84 sm:w-96 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 z-50 space-y-3.5 animate-in fade-in zoom-in-95 duration-100 max-h-[85vh] overflow-y-auto">
+                {/* 1. Schnellauswahl oben */}
+                <div className="grid grid-cols-2 gap-2 pb-2.5 border-b border-slate-800">
                   <button
                     type="button"
-                    onClick={() => {
-                      if (latestMonthValue) setSelectedMonth(latestMonthValue);
-                      setOpenDropdown(false);
-                    }}
+                    onClick={() => selectAndClose(latestMonthValue)}
                     className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                       selectedMonth === latestMonthValue
                         ? 'bg-blue-600 text-white shadow-xs'
@@ -300,10 +276,7 @@ export default function HeaderNav() {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedMonth('all');
-                      setOpenDropdown(false);
-                    }}
+                    onClick={() => selectAndClose('all')}
                     className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                       selectedMonth === 'all'
                         ? 'bg-blue-600 text-white shadow-xs'
@@ -315,40 +288,28 @@ export default function HeaderNav() {
                   </button>
                 </div>
 
-                {/* 2. Jahres-Tabs (Klick wählt das Jahr aus & zeigt dessen Monate) */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    <span>1. Jahr wählen:</span>
-                    {selectedMonth === activeYear && (
-                      <span className="text-emerald-400 font-semibold normal-case">
-                        ✓ Ganzes Jahr {activeYear} aktiv
-                      </span>
-                    )}
+                {/* 2. Ganze Jahre (1-Klick-Auswahl) */}
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Ganzes Jahr wählen (1 Klick):
                   </div>
-
                   <div className="grid grid-cols-4 gap-1.5">
                     {availableYears.map((y) => {
-                      const isCurrentTab = activeYear === y;
-                      const isYearSelected = selectedMonth === y;
+                      const isSelected = selectedMonth === y;
                       return (
                         <button
                           key={y}
                           type="button"
-                          onClick={() => {
-                            setViewYear(y);
-                            setSelectedMonth(y); // Wählt sofort das ganze Jahr aus!
-                          }}
-                          className={`py-2 rounded-xl text-xs font-extrabold transition cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
-                            isYearSelected
+                          onClick={() => selectAndClose(y)}
+                          className={`py-2 rounded-xl text-xs font-bold transition cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                            isSelected
                               ? 'bg-blue-600 text-white ring-2 ring-blue-400 shadow-md'
-                              : isCurrentTab
-                              ? 'bg-slate-700 text-white border border-slate-500'
-                              : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                              : 'bg-slate-800 text-slate-200 hover:bg-slate-700 hover:text-white border border-slate-700'
                           }`}
                         >
                           <span>{y}</span>
                           {y === '2026' && (
-                            <span className="text-[9px] font-normal opacity-80">Aktuell</span>
+                            <span className="text-[9px] font-normal text-blue-300">Aktuell</span>
                           )}
                         </button>
                       );
@@ -356,67 +317,73 @@ export default function HeaderNav() {
                   </div>
                 </div>
 
-                {/* 3. Monate des gewählten Jahres (Klick wählt den Monat aus und schließt Popover) */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    <span>2. Einzelmonat in {activeYear}:</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedMonth(activeYear);
-                        setOpenDropdown(false);
-                      }}
-                      className="text-blue-400 hover:text-blue-300 font-bold normal-case text-xs hover:underline cursor-pointer"
-                    >
-                      📌 Ganzes Jahr {activeYear} zeigen
-                    </button>
+                {/* 3. Monate nach Jahren gruppiert */}
+                <div className="space-y-3 pt-1 border-t border-slate-800">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    Oder Einzelmonat wählen:
                   </div>
 
-                  <div className="grid grid-cols-4 gap-1.5">
-                    {monthsInActiveYear.map(({ ym, m, hasData }) => {
-                      const isSelected = selectedMonth === ym;
-                      const isLatest = ym === latestMonthValue;
+                  {availableYears.map((y) => {
+                    const monthsInYear = onlyMonthsDesc
+                      .filter((ym) => ym.startsWith(`${y}-`))
+                      .sort((a, b) => a.localeCompare(b)); // Jan -> Dez
 
-                      return (
-                        <button
-                          key={ym}
-                          type="button"
-                          onClick={() => {
-                            setSelectedMonth(ym);
-                            setOpenDropdown(false);
-                          }}
-                          className={`py-2 px-1 rounded-xl text-xs font-semibold transition flex flex-col items-center justify-center relative cursor-pointer ${
-                            isSelected
-                              ? 'bg-blue-600 text-white font-bold shadow-md ring-2 ring-blue-400'
-                              : hasData
-                              ? 'bg-slate-800 text-white hover:bg-slate-700'
-                              : 'bg-slate-800/40 text-slate-500 hover:bg-slate-800 hover:text-slate-300'
-                          }`}
-                          title={hasData ? `${GERMAN_MONTHS[m]} ${activeYear}` : `Keine Buchungen in ${GERMAN_MONTHS[m]} ${activeYear}`}
-                        >
-                          <span>{SHORT_GERMAN_MONTHS[m] || m}</span>
-                          {isLatest && !isSelected && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-0.5" title="Neuester Monat" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                    if (monthsInYear.length === 0) return null;
+
+                    return (
+                      <div key={y} className="bg-slate-850/60 p-2.5 rounded-xl border border-slate-800 space-y-1.5">
+                        <div className="flex items-center justify-between text-xs font-bold text-slate-300">
+                          <span>Jahr {y}</span>
+                          <button
+                            type="button"
+                            onClick={() => selectAndClose(y)}
+                            className={`text-[11px] px-2 py-0.5 rounded font-semibold transition cursor-pointer ${
+                              selectedMonth === y
+                                ? 'bg-blue-600 text-white'
+                                : 'text-blue-400 hover:bg-slate-800'
+                            }`}
+                          >
+                            Ganzes Jahr {y}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-4 gap-1">
+                          {monthsInYear.map((ym) => {
+                            const mNum = ym.split('-')[1];
+                            const isSelected = selectedMonth === ym;
+                            const isLatest = ym === latestMonthValue;
+
+                            return (
+                              <button
+                                key={ym}
+                                type="button"
+                                onClick={() => selectAndClose(ym)}
+                                className={`py-1.5 px-1 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1 cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-blue-600 text-white font-bold shadow-xs'
+                                    : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                                }`}
+                              >
+                                <span>{SHORT_MONTHS[mNum] || mNum}</span>
+                                {isLatest && !isSelected && (
+                                  <span className="w-1 h-1 rounded-full bg-blue-400" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
-                {/* 4. Alternative Direktauswahl per Dropdown */}
+                {/* 4. Einfache Auswahlliste als Fallback */}
                 {availableMonths.length > 0 && (
-                  <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+                  <div className="pt-2 border-t border-slate-800 flex items-center gap-2">
                     <span className="text-[11px] text-slate-400 shrink-0">Liste:</span>
                     <select
                       value={selectedMonth}
-                      onChange={(e) => {
-                        setSelectedMonth(e.target.value);
-                        if (/^\d{4}/.test(e.target.value)) {
-                          setViewYear(e.target.value.slice(0, 4));
-                        }
-                        setOpenDropdown(false);
-                      }}
+                      onChange={(e) => selectAndClose(e.target.value)}
                       className="w-full px-2.5 py-1.5 bg-slate-800 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium focus:outline-none focus:border-blue-500 cursor-pointer"
                     >
                       <option value="all">📊 Alle 4 Jahre (Gesamt)</option>
