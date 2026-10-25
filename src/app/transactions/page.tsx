@@ -55,15 +55,49 @@ function cleanBankPurpose(raw: string): string {
   return cleaned || raw;
 }
 
-// Falls die Bank keinen Empfänger ("Unbekannt") mitliefert, nutze den Anfang des bereinigten Buchungstextes als verständlichen Titel
-function getSmartPayeeTitle(tx: Transaction): { title: string; isFallback: boolean } {
+// Extrahiert bei Sammel-Zahlungsdienstleistern (wie PayPal) den echten Händler aus dem Verwendungszweck
+// z.B. "1053275545044/. Bike24 GmbH, Ihr Einkauf bei Bike24 GmbH EREF:..." -> "Bike24 GmbH"
+function extractSubMerchant(payee: string | null, description: string): { merchant: string | null; provider: string | null } {
+  const rawPayee = (payee || '').trim();
+  const desc = cleanBankPurpose(description || '');
+  const isPayPal = /paypal/i.test(rawPayee) || /Ihr Einkauf bei/i.test(desc) || /\bPP\*/i.test(desc);
+
+  if (isPayPal) {
+    // Muster 1: "1053275545044/. Bike24 GmbH, Ihr Einkauf bei..."
+    const slashDotMatch = desc.match(/\/\.\s*([^,;/]+?)(?:,\s*Ihr Einkauf|\s+Ihr Einkauf|$)/i);
+    if (slashDotMatch && slashDotMatch[1].trim().length >= 2) {
+      return { merchant: slashDotMatch[1].trim(), provider: 'PayPal' };
+    }
+    // Muster 2: "Ihr Einkauf bei Bike24 GmbH"
+    const einkaufMatch = desc.match(/Ihr Einkauf bei\s+([^,;/]+?)(?:\s+Artikel|\s+Rechnung|$)/i);
+    if (einkaufMatch && einkaufMatch[1].trim().length >= 2) {
+      return { merchant: einkaufMatch[1].trim(), provider: 'PayPal' };
+    }
+    // Muster 3: "PP*Händler" oder "PAYPAL *Händler"
+    const ppStarMatch = desc.match(/(?:PP\*|PAYPAL\s*\*)\s*([^,;/]+)/i);
+    if (ppStarMatch && ppStarMatch[1].trim().length >= 2) {
+      return { merchant: ppStarMatch[1].trim(), provider: 'PayPal' };
+    }
+    return { merchant: null, provider: 'PayPal' };
+  }
+
+  return { merchant: null, provider: null };
+}
+
+// Falls die Bank keinen Empfänger ("Unbekannt") oder nur "PayPal" mitliefert, zeige den echten Händler bzw. Buchungstext als Titel
+function getSmartPayeeTitle(tx: Transaction): { title: string; isFallback: boolean; providerBadge: string | null } {
+  const sub = extractSubMerchant(tx.payee, tx.description);
+  if (sub.merchant) {
+    return { title: sub.merchant, isFallback: false, providerBadge: sub.provider };
+  }
+
   const rawPayee = (tx.payee || '').trim();
   if (rawPayee && rawPayee.toLowerCase() !== 'unbekannt') {
-    return { title: rawPayee, isFallback: false };
+    return { title: rawPayee, isFallback: false, providerBadge: sub.provider };
   }
   const cleanDesc = cleanBankPurpose(tx.description);
   const shortTitle = cleanDesc.length > 52 ? cleanDesc.slice(0, 52) + '…' : cleanDesc;
-  return { title: shortTitle || 'Bankbuchung / Gebühr', isFallback: true };
+  return { title: shortTitle || 'Bankbuchung / Gebühr', isFallback: true, providerBadge: null };
 }
 
 export default function TransactionsPage() {
@@ -118,6 +152,18 @@ export default function TransactionsPage() {
   const [selectedCatId, setSelectedCatId] = useState<string>('');
   const [learnRuleMode, setLearnRuleMode] = useState<'single' | 'rule'>('single');
   const [savingCategory, setSavingCategory] = useState<boolean>(false);
+
+  // Erweiterte Einstellungen im Modal (Empfänger/Text anpassen, eigenes Regel-Muster, Live-Vorschau, Schnell-Kategorie)
+  const [editingTxFields, setEditingTxFields] = useState<boolean>(false);
+  const [customPayeeInput, setCustomPayeeInput] = useState<string>('');
+  const [customDescInput, setCustomDescInput] = useState<string>('');
+  const [customRulePattern, setCustomRulePattern] = useState<string>('');
+  const [customRuleMatchType, setCustomRuleMatchType] = useState<'KEYWORD' | 'PAYEE' | 'IBAN'>('KEYWORD');
+  const [selectedRulePreviewIds, setSelectedRulePreviewIds] = useState<Set<string>>(new Set());
+  const [showQuickNewCat, setShowQuickNewCat] = useState<boolean>(false);
+  const [quickNewCatName, setQuickNewCatName] = useState<string>('');
+  const [quickNewCatColor, setQuickNewCatColor] = useState<string>('#3b82f6');
+  const [creatingQuickCat, setCreatingQuickCat] = useState<boolean>(false);
 
   // Rule Edit Modal from Transaction Row
   const [editingRuleFromTx, setEditingRuleFromTx] = useState<MatchedRule | null>(null);
@@ -380,13 +426,127 @@ export default function TransactionsPage() {
     });
   };
 
+  // Öffnet das Einzelbuchungs- & Regel-Modal mit intelligenter Vorbelegung (z.B. PayPal-Händler "Bike24 GmbH")
+  const handleOpenCategorizeModal = (tx: Transaction) => {
+    setActiveTx(tx);
+    setSelectedCatId(tx.category?.id || '');
+    setLearnRuleMode(tx.matchedRule ? 'rule' : 'single');
+    setAiResult(null);
+    setEditingTxFields(false);
+    setShowQuickNewCat(false);
+    setQuickNewCatName('');
+
+    const sub = extractSubMerchant(tx.payee, tx.description);
+    setCustomPayeeInput(tx.payee || '');
+    setCustomDescInput(tx.description || '');
+
+    let defaultPattern = '';
+    let defaultMatchType: 'KEYWORD' | 'PAYEE' | 'IBAN' = 'KEYWORD';
+
+    if (tx.matchedRule?.pattern) {
+      defaultPattern = tx.matchedRule.pattern;
+      defaultMatchType = (tx.matchedRule.matchType as any) || 'KEYWORD';
+    } else if (sub.merchant) {
+      defaultPattern = sub.merchant;
+      defaultMatchType = 'KEYWORD';
+    } else if (tx.payee && tx.payee.toLowerCase() !== 'unbekannt' && !/paypal|amazon/i.test(tx.payee)) {
+      defaultPattern = tx.payee
+        .replace(/\b(GmbH|AG|KG|Co\.|OHG|SE|e\.K\.|S\.a\.r\.l\.|et Cie|S\.C\.A)\b/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim() || tx.payee.trim();
+      defaultMatchType = 'KEYWORD';
+    } else {
+      const cleaned = cleanBankPurpose(tx.description);
+      defaultPattern = cleaned.split(',')[0].slice(0, 35).trim();
+      defaultMatchType = 'KEYWORD';
+    }
+
+    setCustomRulePattern(defaultPattern);
+    setCustomRuleMatchType(defaultMatchType);
+  };
+
+  // Live-Vorschau aller Umsätze, die auf das im Modal eingestellte Regel-Muster passen
+  const modalMatchingTxs = useMemo(() => {
+    if (!activeTx) return [];
+    const pLower = (customRulePattern || '').toLowerCase().trim();
+    const cleanRuleIban = (customRulePattern || '').replace(/\s+/g, '').toUpperCase();
+    if (pLower.length < 2) return [activeTx];
+
+    return transactions.filter((t) => {
+      if (t.id === activeTx.id) return true;
+      if (customRuleMatchType === 'IBAN') {
+        if (!t.iban || !cleanRuleIban) return false;
+        return t.iban.replace(/\s+/g, '').toUpperCase() === cleanRuleIban;
+      }
+      if (customRuleMatchType === 'PAYEE') {
+        if (!t.payee) return false;
+        return t.payee.toLowerCase().includes(pLower);
+      }
+      const payeeLower = (t.payee || '').toLowerCase();
+      const descLower = (t.description || '').toLowerCase();
+      return descLower.includes(pLower) || payeeLower.includes(pLower);
+    });
+  }, [activeTx, customRulePattern, customRuleMatchType, transactions]);
+
+  // Aktualisiert die vorausgewählten Umsätze in der Live-Vorschau (standardmäßig: aktueller Umsatz + alle offenen Treffer)
+  useEffect(() => {
+    if (!activeTx) return;
+    const defaultSelected = modalMatchingTxs
+      .filter((t) => t.id === activeTx.id || !t.category || t.matchedRule?.id === activeTx.matchedRule?.id)
+      .map((t) => t.id);
+    setSelectedRulePreviewIds(new Set(defaultSelected));
+  }, [modalMatchingTxs, activeTx]);
+
+  const handleCreateQuickCategory = async () => {
+    if (!quickNewCatName.trim()) return;
+    setCreatingQuickCat(true);
+    try {
+      const res = await fetch('/api/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: quickNewCatName.trim(),
+          color: quickNewCatColor,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.category) {
+        await fetchCategories();
+        setSelectedCatId(data.category.id);
+        setShowQuickNewCat(false);
+        setQuickNewCatName('');
+        setToastMessage(`✅ Neue Kategorie "${data.category.name}" angelegt und ausgewählt!`);
+      } else if (data.error) {
+        alert(data.error);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCreatingQuickCat(false);
+    }
+  };
+
   // Direct Categorization Handler
   const handleAssignCategoryDirect = async (
     txId: string,
     categoryId: string,
     createRule = false,
-    deleteRuleId?: string
+    deleteRuleId?: string,
+    customOptions?: {
+      customPayee?: string;
+      customDescription?: string;
+      customRule?: {
+        pattern: string;
+        matchType: 'KEYWORD' | 'PAYEE' | 'IBAN';
+        applyToTransactionIds: string[];
+      };
+    }
   ) => {
+    if (!categoryId) {
+      alert('Bitte wählen Sie zuerst eine Ziel-Kategorie aus.');
+      return;
+    }
+
     const targetTx = transactions.find((t) => t.id === txId);
     const oldCatId = targetTx?.category?.id || null;
     const wasOpen = !oldCatId;
@@ -394,6 +554,9 @@ export default function TransactionsPage() {
 
     // Buchung bleibt sichtbar, auch wenn sie nicht mehr zum Kategorie-Filter passt
     stickyIdsRef.current.add(txId);
+    if (customOptions?.customRule?.applyToTransactionIds) {
+      customOptions.customRule.applyToTransactionIds.forEach((id) => stickyIdsRef.current.add(id));
+    }
 
     if (wasOpen !== isNowOpen && targetTx) {
       const absAmt = Math.abs(targetTx.amount);
@@ -411,6 +574,8 @@ export default function TransactionsPage() {
           const newCat = categories.find((c) => c.id === categoryId) || null;
           return {
             ...t,
+            payee: customOptions?.customPayee ? customOptions.customPayee : t.payee,
+            description: customOptions?.customDescription ? customOptions.customDescription : t.description,
             category: newCat,
             status: categoryId === 'uncategorized' ? 'UNCATEGORIZED' : 'CATEGORIZED',
             matchedRule: deleteRuleId ? null : t.matchedRule,
@@ -420,6 +585,7 @@ export default function TransactionsPage() {
       })
     );
 
+    setSavingCategory(true);
     try {
       const res = await fetch('/api/transactions/categorize', {
         method: 'POST',
@@ -429,6 +595,9 @@ export default function TransactionsPage() {
           categoryId,
           createRule,
           deleteRuleId,
+          customPayee: customOptions?.customPayee,
+          customDescription: customOptions?.customDescription,
+          customRule: customOptions?.customRule,
         }),
       });
 
@@ -441,9 +610,9 @@ export default function TransactionsPage() {
         } else if (data.isReset) {
           setToastMessage('↩️ Zuordnung zurückgesetzt (Umsatz ist wieder unkategorisiert).');
         } else {
-          let msg = `Kategorie "${data.transaction?.category?.name || 'Kategorie'}" für diesen Umsatz zugewiesen.`;
+          let msg = `Kategorie "${data.transaction?.category?.name || 'Kategorie'}" zugewiesen.`;
           if (data.learnResult?.ruleCreated) {
-            msg += ` 🧠 Dauerhafte Lernregel gespeichert! (${data.learnResult.retroactivelyAppliedCount} weitere Buchungen angepasst)`;
+            msg += ` 🧠 Regel "${data.learnResult.pattern}" gespeichert (${data.learnResult.retroactivelyAppliedCount} weitere Umsätze zugeordnet)!`;
           }
           setToastMessage(`✅ ${msg}`);
         }
@@ -456,7 +625,14 @@ export default function TransactionsPage() {
           setTransactions((prev) =>
             prev.map((t) =>
               t.id === txId
-                ? { ...t, category: data.transaction.category || null, status: data.transaction.status, matchedRule: data.transaction.matchedRule || null }
+                ? {
+                    ...t,
+                    payee: data.transaction.payee ?? t.payee,
+                    description: data.transaction.description ?? t.description,
+                    category: data.transaction.category || null,
+                    status: data.transaction.status,
+                    matchedRule: data.transaction.matchedRule || null,
+                  }
                 : t
             )
           );
@@ -470,6 +646,8 @@ export default function TransactionsPage() {
     } catch (e) {
       console.error(e);
       fetchTransactions(true);
+    } finally {
+      setSavingCategory(false);
     }
   };
 
@@ -903,7 +1081,7 @@ export default function TransactionsPage() {
                   const isChecked = selectedTxIds.has(tx.id);
                   const isDoneHere = stickyIdsRef.current.has(tx.id) && !matchesCategoryFilter(tx);
                   const isUncategorized = !tx.category;
-                  const { title: displayTitle, isFallback } = getSmartPayeeTitle(tx);
+                  const { title: displayTitle, isFallback, providerBadge } = getSmartPayeeTitle(tx);
                   const cleanedPurpose = cleanBankPurpose(tx.description);
                   const isExpanded = expandedDescIds.has(tx.id);
 
@@ -945,6 +1123,12 @@ export default function TransactionsPage() {
                           <span className="font-bold text-slate-900 text-sm truncate max-w-md">
                             {displayTitle}
                           </span>
+
+                          {providerBadge && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200/80">
+                              💳 via {providerBadge}
+                            </span>
+                          )}
 
                           {isFallback && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
@@ -1024,13 +1208,8 @@ export default function TransactionsPage() {
 
                           <button
                             type="button"
-                            onClick={() => {
-                              setActiveTx(tx);
-                              setSelectedCatId(tx.category?.id || categories[0]?.id || '');
-                              setLearnRuleMode('single');
-                              setAiResult(null);
-                            }}
-                            title="Dauerhafte Lieferanten-Regel erstellen oder Gemini KI fragen"
+                            onClick={() => handleOpenCategorizeModal(tx)}
+                            title="Umsatzdetails, Suchbegriff-Regel oder Gemini KI öffnen"
                             className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer shrink-0"
                           >
                             🧠 Regel / KI
@@ -1197,139 +1376,495 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Interactive Categorization Modal */}
-      {activeTx && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-lg font-bold text-slate-900">Kategorie anpassen & Regel-Optionen</h3>
-              <button onClick={() => setActiveTx(null)} className="text-slate-400 hover:text-slate-600 font-bold">
-                ✕
-              </button>
-            </div>
+      {/* Voll einstellbares Kategorie- & Regel-Modal */}
+      {activeTx && (() => {
+        const subInfo = extractSubMerchant(activeTx.payee, activeTx.description);
+        const cleanPayeeCandidate =
+          activeTx.payee && activeTx.payee.toLowerCase() !== 'unbekannt'
+            ? activeTx.payee
+                .replace(/\b(GmbH|AG|KG|Co\.|OHG|SE|e\.K\.|S\.a\.r\.l\.|et Cie|S\.C\.A)\b/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim()
+            : '';
 
-            <div className="bg-slate-50 p-4 rounded-xl space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Empfänger:</span>
-                <span className="font-semibold text-slate-900">{activeTx.payee || 'Unbekannt'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Betrag:</span>
-                <span className="font-bold text-slate-900">{formatEuro(activeTx.amount)}</span>
-              </div>
-              <div className="text-xs text-slate-500 pt-1 border-t border-slate-200/60">
-                <b>Verwendungszweck:</b> {activeTx.description}
-              </div>
-            </div>
-
-            {/* Gemini AI Assistant Button & Banner */}
-            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
-                  <span>🤖</span> Gemini KI Vorschlag
-                </span>
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150 my-8 max-h-[92vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Umsatz & Regel-Optionen anpassen</h3>
+                  <p className="text-xs text-slate-500">
+                    Kategorie zuweisen, Empfänger/Text anpassen oder eigene Dauerregel mit Live-Vorschau erstellen
+                  </p>
+                </div>
                 <button
                   type="button"
-                  onClick={handleAskGeminiAI}
-                  disabled={aiLoading}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition shadow-xs disabled:opacity-50"
-                >
-                  {aiLoading ? 'Analysiere...' : 'KI Vorschlag anfordern'}
-                </button>
-              </div>
-
-              {aiResult && (
-                <div className="text-xs text-indigo-900 bg-white/80 p-3 rounded-lg border border-indigo-200 space-y-1">
-                  <div className="flex justify-between font-bold">
-                    <span>Vorschlag: {aiResult.name}</span>
-                    <span className="text-indigo-600">{aiResult.score}% Konfidenz</span>
-                  </div>
-                  <p className="text-slate-600 italic">{aiResult.reasoning}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">Ziel-Kategorie auswählen:</label>
-              <select
-                value={selectedCatId}
-                onChange={(e) => setSelectedCatId(e.target.value)}
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="uncategorized">🔍 Unkategorisiert (Zurücksetzen)</option>
-                {categories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Clear Mode Selection: Single Transaction vs Permanent Vendor Rule */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-              <div className="text-xs font-bold text-slate-800">
-                ⚙️ Wie soll diese Änderung angewendet werden?
-              </div>
-
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="radio"
-                  name="learnMode"
-                  checked={learnRuleMode === 'single'}
-                  onChange={() => setLearnRuleMode('single')}
-                  className="mt-1 w-4 h-4 text-blue-600 focus:ring-blue-500"
-                />
-                <div className="text-xs text-slate-700">
-                  <span className="font-bold text-slate-900 block">📍 Nur DIESEN einzelnen Umsatz ändern</span>
-                  Ideal für Misch-Lieferanten wie MediaMarkt, Amazon oder PayPal (keine automatische Regel für die Zukunft).
-                </div>
-              </label>
-
-              <label className="flex items-start gap-3 cursor-pointer pt-1 border-t border-slate-200/60">
-                <input
-                  type="radio"
-                  name="learnMode"
-                  checked={learnRuleMode === 'rule'}
-                  onChange={() => setLearnRuleMode('rule')}
-                  className="mt-1 w-4 h-4 text-blue-600 focus:ring-blue-500"
-                />
-                <div className="text-xs text-slate-700">
-                  <span className="font-bold text-slate-900 block">🧠 Dauerhafte Lernregel für alle {activeTx.payee || 'Lieferanten'}-Umsätze speichern</span>
-                  Ideal für eindeutige Hotel-Lieferanten (wie Metro, Telekom oder Schwälbchen).
-                </div>
-              </label>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <button
-                type="button"
-                onClick={() => handleAssignCategoryDirect(activeTx.id, 'uncategorized', false)}
-                className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200"
-              >
-                ❌ Zurücksetzen
-              </button>
-
-              <div className="flex gap-3">
-                <button
                   onClick={() => setActiveTx(null)}
-                  className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition"
+                  className="text-slate-400 hover:text-slate-600 font-bold text-lg cursor-pointer"
                 >
-                  Abbrechen
+                  ✕
                 </button>
+              </div>
+
+              {/* 1. Umsatz-Details (mit Option zum Bearbeiten von Empfänger & Text) */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80 space-y-2.5 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                      Buchung vom {new Date(activeTx.date).toLocaleDateString('de-DE')}
+                    </span>
+                    {subInfo.merchant && (
+                      <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-800 text-[11px] font-bold">
+                        💳 Erkannter {subInfo.provider}-Händler: {subInfo.merchant}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="font-extrabold text-base text-slate-900">{formatEuro(activeTx.amount)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditingTxFields((prev) => !prev)}
+                      className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
+                    >
+                      {editingTxFields ? '▲ Bearbeitung schließen' : '✏️ Empfänger/Text anpassen'}
+                    </button>
+                  </div>
+                </div>
+
+                {!editingTxFields ? (
+                  <>
+                    <div className="flex justify-between items-baseline gap-4">
+                      <span className="text-slate-500 text-xs shrink-0">Bank-Empfänger:</span>
+                      <div className="text-right font-semibold text-slate-900 text-xs sm:text-sm flex items-center gap-2 flex-wrap justify-end">
+                        <span>{customPayeeInput || activeTx.payee || 'Unbekannt'}</span>
+                        {subInfo.merchant && customPayeeInput !== subInfo.merchant && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomPayeeInput(`${subInfo.merchant} (PayPal)`);
+                              setEditingTxFields(true);
+                            }}
+                            className="px-2 py-0.5 bg-white hover:bg-blue-50 text-blue-600 border border-blue-200 rounded-md text-[11px] font-semibold transition cursor-pointer"
+                          >
+                            ⚡ „{subInfo.merchant}“ als Empfänger setzen
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-600 pt-1.5 border-t border-slate-200/60 break-words">
+                      <b className="text-slate-700">Verwendungszweck:</b> {customDescInput || activeTx.description}
+                    </div>
+                  </>
+                ) : (
+                  <div className="pt-2 border-t border-slate-200 space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Empfänger / Anzeige-Name für diesen Umsatz:
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={customPayeeInput}
+                          onChange={(e) => setCustomPayeeInput(e.target.value)}
+                          placeholder="z.B. Bike24 GmbH"
+                          className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500"
+                        />
+                        {subInfo.merchant && (
+                          <button
+                            type="button"
+                            onClick={() => setCustomPayeeInput(`${subInfo.merchant} (PayPal)`)}
+                            className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg text-xs font-bold shrink-0 cursor-pointer"
+                          >
+                            {subInfo.merchant} übernehmen
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Verwendungszweck / Eigene Notiz:
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={customDescInput}
+                        onChange={(e) => setCustomDescInput(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 2. Ziel-Kategorie auswählen + KI-Vorschlag + Direkt Neue Kategorie anlegen */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <label className="block text-sm font-bold text-slate-800">
+                    1. Ziel-Kategorie auswählen:
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAskGeminiAI}
+                      disabled={aiLoading}
+                      className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-lg transition cursor-pointer disabled:opacity-50"
+                    >
+                      {aiLoading ? '🤖 Analysiere...' : '🤖 Gemini KI fragen'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickNewCat((prev) => !prev)}
+                      className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
+                    >
+                      {showQuickNewCat ? '✕ Abbrechen' : '➕ Neue Kategorie anlegen'}
+                    </button>
+                  </div>
+                </div>
+
+                {aiResult && (
+                  <div className="text-xs text-indigo-950 bg-indigo-50/80 p-3 rounded-xl border border-indigo-200 space-y-1">
+                    <div className="flex justify-between font-bold">
+                      <span>🤖 KI-Empfehlung: {aiResult.name}</span>
+                      {aiResult.score > 0 && <span className="text-indigo-600">{aiResult.score}% Sicherheit</span>}
+                    </div>
+                    <p className="text-slate-600">{aiResult.reasoning}</p>
+                  </div>
+                )}
+
+                {showQuickNewCat && (
+                  <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                    <input
+                      type="text"
+                      placeholder="Name der neuen Kategorie (z.B. Gästeservice / Räder)"
+                      value={quickNewCatName}
+                      onChange={(e) => setQuickNewCatName(e.target.value)}
+                      className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={quickNewCatColor}
+                        onChange={(e) => setQuickNewCatColor(e.target.value)}
+                        className="w-8 h-8 rounded cursor-pointer border border-slate-300 bg-white p-0.5"
+                        title="Farbe wählen"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCreateQuickCategory}
+                        disabled={creatingQuickCat || !quickNewCatName.trim()}
+                        className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition cursor-pointer disabled:opacity-50"
+                      >
+                        {creatingQuickCat ? 'Erstelle...' : 'Kategorie speichern'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <select
+                  value={selectedCatId}
+                  onChange={(e) => setSelectedCatId(e.target.value)}
+                  className={`w-full px-4 py-2.5 border rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 cursor-pointer ${
+                    !selectedCatId
+                      ? 'bg-amber-50 border-amber-300 text-amber-900'
+                      : 'bg-slate-50 border-slate-200 text-slate-900'
+                  }`}
+                >
+                  <option value="">-- Bitte Ziel-Kategorie auswählen --</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                  <option value="uncategorized">🔍 Unkategorisiert (Offen lassen / Zurücksetzen)</option>
+                </select>
+              </div>
+
+              {/* 3. Einzel-Zuordnung vs. Voll einstellbare Dauerregel */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
+                <div className="text-sm font-bold text-slate-800">
+                  2. Wie soll diese Zuordnung angewendet werden?
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setLearnRuleMode('single')}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      learnRuleMode === 'single'
+                        ? 'bg-white border-blue-600 ring-2 ring-blue-500/20 shadow-2xs'
+                        : 'bg-white/60 border-slate-200 hover:bg-white'
+                    }`}
+                  >
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        checked={learnRuleMode === 'single'}
+                        onChange={() => setLearnRuleMode('single')}
+                        className="text-blue-600"
+                      />
+                      <span>📍 Nur DIESEN einzelnen Umsatz</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1 pl-5">
+                      Einmalige Ausgabe – es wird keine automatische Regel für die Zukunft erstellt.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLearnRuleMode('rule')}
+                    className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                      learnRuleMode === 'rule'
+                        ? 'bg-white border-blue-600 ring-2 ring-blue-500/20 shadow-2xs'
+                        : 'bg-white/60 border-slate-200 hover:bg-white'
+                    }`}
+                  >
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                      <input
+                        type="radio"
+                        checked={learnRuleMode === 'rule'}
+                        onChange={() => setLearnRuleMode('rule')}
+                        className="text-blue-600"
+                      />
+                      <span>🧠 Dauerhafte Regel erstellen</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1 pl-5">
+                      Eigenen Suchbegriff (z. B. „{subInfo.merchant || customRulePattern || 'Händler'}“) festlegen & auf Treffer anwenden.
+                    </p>
+                  </button>
+                </div>
+
+                {/* Wenn "Dauerhafte Regel erstellen" aktiv ist -> Alle Einstellungen frei anpassbar! */}
+                {learnRuleMode === 'rule' && (
+                  <div className="bg-white p-4 rounded-xl border border-blue-200 space-y-4 animate-in fade-in duration-150">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Suchbegriff / Muster für die Regel (frei anpassbar):
+                        </label>
+                        <input
+                          type="text"
+                          value={customRulePattern}
+                          onChange={(e) => setCustomRulePattern(e.target.value)}
+                          placeholder="z.B. Bike24 GmbH oder Telekom"
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Wo soll gesucht werden?
+                        </label>
+                        <select
+                          value={customRuleMatchType}
+                          onChange={(e) => setCustomRuleMatchType(e.target.value as any)}
+                          className="w-full px-2.5 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 cursor-pointer"
+                        >
+                          <option value="KEYWORD">🔎 Empfänger & Text (Empfohlen)</option>
+                          <option value="PAYEE">🏢 Nur Empfänger-Name</option>
+                          {activeTx.iban && <option value="IBAN">🏦 Exakte IBAN</option>}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Schnell-Auswahl-Chips für das Regel-Muster */}
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="text-slate-400 font-medium">Vorschläge zum Anklicken:</span>
+                      {subInfo.merchant && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomRulePattern(subInfo.merchant!);
+                            setCustomRuleMatchType('KEYWORD');
+                          }}
+                          className={`px-2 py-0.5 rounded-md font-semibold border transition cursor-pointer ${
+                            customRulePattern === subInfo.merchant
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          🛍️ {subInfo.merchant}
+                        </button>
+                      )}
+                      {cleanPayeeCandidate && cleanPayeeCandidate !== subInfo.merchant && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomRulePattern(cleanPayeeCandidate);
+                            setCustomRuleMatchType('KEYWORD');
+                          }}
+                          className={`px-2 py-0.5 rounded-md font-semibold border transition cursor-pointer ${
+                            customRulePattern === cleanPayeeCandidate
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          🏢 {cleanPayeeCandidate}
+                        </button>
+                      )}
+                      {activeTx.iban && !/paypal/i.test(activeTx.payee || '') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomRulePattern(activeTx.iban!);
+                            setCustomRuleMatchType('IBAN');
+                          }}
+                          className={`px-2 py-0.5 rounded-md font-mono font-semibold border transition cursor-pointer ${
+                            customRuleMatchType === 'IBAN'
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          🏦 IBAN: {activeTx.iban}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Warnhinweis falls jemand versehentlich "PayPal" als Suchbegriff eingibt */}
+                    {/^(paypal|paypal europe)/i.test(customRulePattern.trim()) && (
+                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+                        ⚠️ <b>Achtung:</b> Wenn Sie nur „PayPal“ als Regel-Begriff speichern, würden <i>alle</i> PayPal-Käufe in dieser Kategorie landen! Nutzen Sie stattdessen den konkreten Händlernamen aus dem Verwendungszweck{subInfo.merchant ? ` (z.B. „${subInfo.merchant}“)` : ''}.
+                      </div>
+                    )}
+
+                    {/* Live-Vorschau der passenden Umsätze */}
+                    <div className="space-y-2 pt-1 border-t border-slate-100">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-700">
+                          📋 Gefundene Umsätze mit „{customRulePattern || '…'}“ ({modalMatchingTxs.length} Treffer,{' '}
+                          {selectedRulePreviewIds.size} ausgewählt):
+                        </span>
+                        {modalMatchingTxs.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedRulePreviewIds(
+                                  new Set(
+                                    modalMatchingTxs
+                                      .filter((t) => t.id === activeTx.id || !t.category)
+                                      .map((t) => t.id)
+                                  )
+                                )
+                              }
+                              className="text-[11px] text-blue-600 hover:underline font-semibold cursor-pointer"
+                            >
+                              Nur offene
+                            </button>
+                            <span className="text-slate-300">|</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedRulePreviewIds(new Set(modalMatchingTxs.map((t) => t.id)))
+                              }
+                              className="text-[11px] text-blue-600 hover:underline font-semibold cursor-pointer"
+                            >
+                              Alle {modalMatchingTxs.length} auswählen
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100 bg-slate-50/50">
+                        {modalMatchingTxs.map((t) => {
+                          const isChecked = selectedRulePreviewIds.has(t.id);
+                          const { title } = getSmartPayeeTitle(t);
+                          return (
+                            <label
+                              key={t.id}
+                              className="p-2 px-3 flex items-center justify-between gap-2 text-xs hover:bg-white cursor-pointer"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => {
+                                    setSelectedRulePreviewIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(t.id)) next.delete(t.id);
+                                      else next.add(t.id);
+                                      return next;
+                                    });
+                                  }}
+                                  className="w-3.5 h-3.5 rounded text-blue-600"
+                                />
+                                <div className="truncate">
+                                  <span className="font-semibold text-slate-800">{title}</span>
+                                  <span className="text-slate-400 font-mono text-[10px] ml-2">
+                                    {new Date(t.date).toLocaleDateString('de-DE')}
+                                  </span>
+                                  {t.category && (
+                                    <span className="ml-2 px-1.5 py-0.2 rounded bg-slate-200/70 text-slate-600 text-[10px]">
+                                      bisher: {t.category.name}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="font-bold text-slate-900 shrink-0 tabular-nums">
+                                {formatEuro(t.amount)}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Actions */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                 <button
-                  onClick={() =>
-                    handleAssignCategoryDirect(activeTx.id, selectedCatId, learnRuleMode === 'rule')
-                  }
-                  disabled={savingCategory}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-xs transition"
+                  type="button"
+                  onClick={() => handleAssignCategoryDirect(activeTx.id, 'uncategorized', false)}
+                  className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
                 >
-                  {savingCategory ? 'Speichere...' : 'Speichern'}
+                  ❌ Auf „Offen“ zurücksetzen
                 </button>
+
+                <div className="flex gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTx(null)}
+                    className="px-4 py-2 text-slate-600 text-xs sm:text-sm font-semibold hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingCategory || !selectedCatId}
+                    onClick={() => {
+                      const hasEditedPayee =
+                        customPayeeInput.trim() && customPayeeInput.trim() !== (activeTx.payee || '');
+                      const hasEditedDesc =
+                        customDescInput.trim() && customDescInput.trim() !== (activeTx.description || '');
+
+                      handleAssignCategoryDirect(activeTx.id, selectedCatId, learnRuleMode === 'rule', undefined, {
+                        customPayee: hasEditedPayee ? customPayeeInput.trim() : undefined,
+                        customDescription: hasEditedDesc ? customDescInput.trim() : undefined,
+                        customRule:
+                          learnRuleMode === 'rule' && customRulePattern.trim().length >= 2
+                            ? {
+                                pattern: customRulePattern.trim(),
+                                matchType: customRuleMatchType,
+                                applyToTransactionIds: Array.from(selectedRulePreviewIds),
+                              }
+                            : undefined,
+                      });
+                    }}
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                  >
+                    {savingCategory
+                      ? 'Speichere...'
+                      : learnRuleMode === 'rule'
+                      ? `🧠 Regel & ${selectedRulePreviewIds.size} Umsatz${selectedRulePreviewIds.size === 1 ? '' : 'e'} speichern`
+                      : '💾 Zuordnung speichern'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
