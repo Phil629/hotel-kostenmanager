@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     const [allExpenses, transactions] = await Promise.all([
       prisma.transaction.findMany({
         where: { amount: { lt: 0 } },
-        select: { date: true },
+        select: { date: true, status: true, categoryId: true, amount: true },
         orderBy: { date: 'desc' },
       }),
       prisma.transaction.findMany({
@@ -97,12 +97,26 @@ export async function GET(req: NextRequest) {
 
     const monthsSet = new Set<string>();
     const yearsSet = new Set<string>();
+    let periodTotalCount = 0;
+    let periodOpenCount = 0;
+    let periodOpenAmountCents = 0;
+
     for (const t of allExpenses) {
       const dateObj = new Date(t.date);
       const y = String(dateObj.getUTCFullYear());
       const ym = `${y}-${String(dateObj.getUTCMonth() + 1).padStart(2, '0')}`;
       monthsSet.add(ym);
       yearsSet.add(y);
+
+      const inPeriod =
+        !month || month === 'all' || (month.length === 4 ? y === month : ym === month);
+      if (inPeriod) {
+        periodTotalCount++;
+        if (t.status === 'UNCATEGORIZED' || !t.categoryId) {
+          periodOpenCount++;
+          periodOpenAmountCents += Math.round(Math.abs(t.amount) * 100);
+        }
+      }
     }
 
     const availableMonths: any[] = [];
@@ -128,6 +142,10 @@ export async function GET(req: NextRequest) {
           totalCount,
           uncategorizedCount,
           totalExpenses,
+          periodTotalCount,
+          periodOpenCount,
+          periodCategorizedCount: periodTotalCount - periodOpenCount,
+          periodOpenAmount: periodOpenAmountCents / 100,
         },
       },
       {

@@ -36,10 +36,47 @@ interface MonthOption {
   label: string;
 }
 
+interface PeriodStats {
+  totalCount: number;
+  openCount: number;
+  categorizedCount: number;
+  openAmount: number;
+}
+
+// Entfernt kryptische SEPA-Maschinencodes (EREF, MREF, CRED, BIC, doppelte IBAN) für eine saubere 1-Zeilen-Vorschau
+function cleanBankPurpose(raw: string): string {
+  if (!raw) return '';
+  let cleaned = raw
+    .replace(/\b(EREF|MREF|CRED|SVWZ|ABWA|BIC|KREF)\s*[:+]\s*[^\s,;]+/gi, '')
+    .replace(/\b(IBAN|BIC)\s*[:]\s*[A-Z0-9]+/gi, '')
+    .replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return cleaned || raw;
+}
+
+// Falls die Bank keinen Empfänger ("Unbekannt") mitliefert, nutze den Anfang des bereinigten Buchungstextes als verständlichen Titel
+function getSmartPayeeTitle(tx: Transaction): { title: string; isFallback: boolean } {
+  const rawPayee = (tx.payee || '').trim();
+  if (rawPayee && rawPayee.toLowerCase() !== 'unbekannt') {
+    return { title: rawPayee, isFallback: false };
+  }
+  const cleanDesc = cleanBankPurpose(tx.description);
+  const shortTitle = cleanDesc.length > 52 ? cleanDesc.slice(0, 52) + '…' : cleanDesc;
+  return { title: shortTitle || 'Bankbuchung / Gebühr', isFallback: true };
+}
+
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [availableMonths, setAvailableMonths] = useState<MonthOption[]>([]);
+  const [periodStats, setPeriodStats] = useState<PeriodStats>({
+    totalCount: 0,
+    openCount: 0,
+    categorizedCount: 0,
+    openAmount: 0,
+  });
+  const [expandedDescIds, setExpandedDescIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const hasLoadedOnceRef = useRef(false);
@@ -141,6 +178,16 @@ export default function TransactionsPage() {
       if (data.availableMonths) {
         setAvailableMonths(data.availableMonths);
       }
+      if (data.stats) {
+        setPeriodStats({
+          totalCount: data.stats.periodTotalCount ?? data.stats.totalCount ?? fetched.length,
+          openCount: data.stats.periodOpenCount ?? data.stats.uncategorizedCount ?? 0,
+          categorizedCount:
+            data.stats.periodCategorizedCount ??
+            (data.stats.periodTotalCount ?? fetched.length) - (data.stats.periodOpenCount ?? 0),
+          openAmount: data.stats.periodOpenAmount ?? 0,
+        });
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -151,6 +198,12 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     fetchCategories();
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get('status') === 'UNCATEGORIZED') {
+        setSelectedCategory('uncategorized');
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -318,6 +371,15 @@ export default function TransactionsPage() {
     }
   };
 
+  const toggleDescExpand = (id: string) => {
+    setExpandedDescIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   // Direct Categorization Handler
   const handleAssignCategoryDirect = async (
     txId: string,
@@ -327,9 +389,21 @@ export default function TransactionsPage() {
   ) => {
     const targetTx = transactions.find((t) => t.id === txId);
     const oldCatId = targetTx?.category?.id || null;
+    const wasOpen = !oldCatId;
+    const isNowOpen = categoryId === 'uncategorized';
 
     // Buchung bleibt sichtbar, auch wenn sie nicht mehr zum Kategorie-Filter passt
     stickyIdsRef.current.add(txId);
+
+    if (wasOpen !== isNowOpen && targetTx) {
+      const absAmt = Math.abs(targetTx.amount);
+      setPeriodStats((prev) => ({
+        ...prev,
+        openCount: Math.max(0, prev.openCount + (isNowOpen ? 1 : -1)),
+        categorizedCount: Math.max(0, prev.categorizedCount + (isNowOpen ? -1 : 1)),
+        openAmount: Math.max(0, Math.round((prev.openAmount + (isNowOpen ? absAmt : -absAmt)) * 100) / 100),
+      }));
+    }
 
     setTransactions((prev) =>
       prev.map((t) => {
@@ -516,44 +590,103 @@ export default function TransactionsPage() {
     return num.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
   };
 
+  const periodProgressPct =
+    periodStats.totalCount > 0
+      ? Math.round((periodStats.categorizedCount / periodStats.totalCount) * 100)
+      : 100;
+
   return (
-    <div className="space-y-8 relative pb-24">
-      {/* Top Banner & Upload */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Kontoauszüge & Ausgaben</h1>
-          <p className="text-slate-500 text-sm mt-1">
-            Reine Ausgabenübersicht mit Mehrfach-Auswahl, 1-Klick-Massenänderung & Regelprüfung
-          </p>
+    <div className="space-y-5 relative pb-24">
+      {/* 1. Klare Aufgaben- & Upload-Kopfzeile */}
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              Umsätze & Kategorien zuordnen
+            </h1>
+            <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
+              1. Kontoauszug hochladen → 2. Offene Buchungen einer Kategorie zuweisen (oder als feste Regel speichern)
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              accept=".csv,.txt,.xml"
+              className="hidden"
+              id="bank-file-upload"
+            />
+            <label
+              htmlFor="bank-file-upload"
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm cursor-pointer transition shadow-xs flex items-center gap-2 ${
+                uploading
+                  ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+              }`}
+            >
+              {uploading ? '🔄 Importiere Datei...' : '📥 Kontoauszug hochladen (CSV / CAMT)'}
+            </label>
+          </div>
         </div>
 
-        <div className="flex items-center gap-4 shrink-0">
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileUpload}
-            accept=".csv,.txt,.xml"
-            className="hidden"
-            id="bank-file-upload"
-          />
-          <label
-            htmlFor="bank-file-upload"
-            className={`px-5 py-2.5 rounded-xl font-semibold text-sm cursor-pointer transition shadow-xs flex items-center gap-2 ${
-              uploading
-                ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
+        {/* Visuelle Aufgaben-Box: Zeigt sofort, ob noch etwas zu tun ist */}
+        {!loading && periodStats.totalCount > 0 && (
+          <div
+            className={`p-3.5 sm:px-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              periodStats.openCount > 0
+                ? 'bg-amber-50/80 border-amber-200 text-amber-950'
+                : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
             }`}
           >
-            {uploading ? '🔄 Importiere Datei...' : '📥 Kontoauszug hochladen (CSV/CAMT)'}
-          </label>
-        </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xl shrink-0">{periodStats.openCount > 0 ? '🎯' : '✅'}</span>
+              <div className="text-xs sm:text-sm">
+                {periodStats.openCount > 0 ? (
+                  <>
+                    <b>Aufgabe offen:</b> In diesem Zeitraum sind noch{' '}
+                    <span className="underline font-extrabold">{periodStats.openCount} Ausgaben</span> (
+                    {formatEuro(periodStats.openAmount)}) ohne Kategorie.
+                  </>
+                ) : (
+                  <>
+                    <b>Alles erledigt!</b> Alle <b>{periodStats.totalCount} Ausgaben</b> in diesem Zeitraum sind bereits
+                    einer Kategorie zugeordnet ({periodProgressPct}%).
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              {periodStats.openCount > 0 && selectedCategory !== 'uncategorized' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory('uncategorized')}
+                  className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
+                >
+                  👉 Jetzt die {periodStats.openCount} offenen Umsätze anzeigen
+                </button>
+              )}
+              {selectedCategory === 'uncategorized' && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory('all')}
+                  className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold rounded-lg transition cursor-pointer"
+                >
+                  Alle {periodStats.totalCount} Buchungen zeigen
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Notifications / Toast */}
       {uploadMessage && (
         <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-sm flex items-center justify-between">
           <span>{uploadMessage}</span>
-          <button onClick={() => setUploadMessage(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+          <button onClick={() => setUploadMessage(null)} className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer">
             ✕
           </button>
         </div>
@@ -566,118 +699,171 @@ export default function TransactionsPage() {
             {lastAssignedTx && (
               <button
                 onClick={handleUndoLastAssignment}
-                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition"
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
               >
                 ↩️ Rückgängig machen
               </button>
             )}
-            <button onClick={() => setToastMessage(null)} className="text-emerald-400 hover:text-emerald-700 font-bold">
+            <button onClick={() => setToastMessage(null)} className="text-emerald-400 hover:text-emerald-700 font-bold cursor-pointer">
               ✕
             </button>
           </div>
         </div>
       )}
 
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col lg:flex-row gap-4 items-center justify-between">
-        {/* Search */}
-        <div className="flex items-center gap-3 w-full lg:w-80">
-          <input
-            type="text"
-            placeholder="🔍 Nach Lieferant (z.B. PayPal), IBAN..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+      {/* 2. Aufgeräumte Modus-Tabs & Einzeilige Filterleiste */}
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between">
+        {/* Links: Schnelle Arbeits-Tabs (Offen vs. Alle) */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory('uncategorized')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-2 ${
+              selectedCategory === 'uncategorized'
+                ? 'bg-amber-500 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <span>🎯 Offene Zuordnungen</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-extrabold ${
+                selectedCategory === 'uncategorized'
+                  ? 'bg-white/25 text-white'
+                  : periodStats.openCount > 0
+                  ? 'bg-amber-200 text-amber-900'
+                  : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {periodStats.openCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelectedCategory('all')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-2 ${
+              selectedCategory === 'all'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <span>📋 Alle Buchungen</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                selectedCategory === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {periodStats.totalCount}
+            </span>
+          </button>
+
           {isFetching && (
-            <span className="text-[11px] font-medium text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full animate-pulse shrink-0">
-              Lade…
+            <span className="text-[11px] font-medium text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full animate-pulse">
+              Aktualisiere…
             </span>
           )}
         </div>
 
-        {/* Filters: Month & Category */}
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-          {/* Dynamic Month Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Monat:</span>
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">📅 Alle Monate (Gesamt)</option>
-              {availableMonths.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* Rechts: Zeitraum, Kategorie-Filter & Suche in einer sauberen Reihe */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Zeitraum */}
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            title="Zeitraum auswählen"
+          >
+            <option value="all">📅 Alle Monate (Gesamt)</option>
+            {availableMonths.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
 
-          {/* Category Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Kategorie:</span>
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">Alle Kategorien</option>
-              <option value="uncategorized">🔍 Unkategorisiert (Offen)</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Bestimmte Kategorie filtern */}
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer max-w-[210px]"
+            title="Nach Kategorie filtern"
+          >
+            <option value="all">🏷️ Alle Kategorien</option>
+            <option value="uncategorized">🎯 Nur Unkategorisiert (Offen)</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
 
-          {/* Sort Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Sortierung:</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortOption)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="date_desc">📅 Datum (neueste zuerst)</option>
-              <option value="date_asc">📅 Datum (älteste zuerst)</option>
-              <option value="amount_desc">💰 Umsatzgröße (größte zuerst)</option>
-              <option value="amount_asc">💰 Umsatzgröße (kleinste zuerst)</option>
-            </select>
+          {/* Suche */}
+          <div className="relative flex-1 sm:flex-initial sm:w-60">
+            <input
+              type="text"
+              placeholder="🔍 Lieferant, Text, Betrag..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 pr-7"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+                title="Suche zurücksetzen"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Info-Leiste für erledigte, aber bewusst eingeblendet gelassene Buchungen */}
       {doneCount > 0 && (
-        <div className="px-4 py-2.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 text-xs flex items-center justify-between">
+        <div className="px-4 py-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-emerald-900 text-xs flex items-center justify-between">
           <span>
-            📌 <b>{doneCount}</b> bereits neu zugeordnete Buchung{doneCount === 1 ? ' bleibt' : 'en bleiben'} zur Orientierung an Ort und Stelle sichtbar (kein Wegspringen).
+            ✅ <b>{doneCount}</b> gerade zugeordnete Buchung{doneCount === 1 ? ' bleibt' : 'en bleiben'} zur Kontrolle noch sichtbar, bis Sie den Filter wechseln.
           </span>
           <button
             type="button"
             onClick={hideDoneTransactions}
-            className="px-3 py-1 bg-white hover:bg-slate-200 text-slate-700 font-semibold rounded-lg border border-slate-300 transition cursor-pointer"
+            className="px-3 py-1 bg-white hover:bg-emerald-100 text-emerald-800 font-semibold rounded-lg border border-emerald-300 transition cursor-pointer"
           >
-            Erledigte ausblenden
+            Erledigte jetzt ausblenden
           </button>
         </div>
       )}
 
-      {/* Transactions Table */}
+      {/* 3. Kompakte, übersichtliche Tabelle (ohne SEPA-Salat & ohne abgeschnittenen Rand) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {loading ? (
           <div className="p-12 text-center text-slate-400 text-sm">Lade Umsätze...</div>
         ) : sortedTransactions.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 text-sm">Keine passenden Umsätze für diese Filter gefunden.</div>
+          <div className="p-12 text-center space-y-3">
+            <div className="text-3xl">{selectedCategory === 'uncategorized' ? '🎉' : '🔎'}</div>
+            <div className="text-slate-800 font-bold text-sm">
+              {selectedCategory === 'uncategorized'
+                ? 'Super! Keine offenen Umsätze in diesem Zeitraum.'
+                : 'Keine passenden Umsätze für diese Filter gefunden.'}
+            </div>
+            {selectedCategory !== 'all' && (
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('all')}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Alle Buchungen des Zeitraums anzeigen
+              </button>
+            )}
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700">
-              <thead className="bg-slate-50 text-slate-500 uppercase text-xs border-b border-slate-200 font-semibold tracking-wider">
+          <div>
+            <table className="w-full text-left text-sm text-slate-700 table-fixed">
+              <thead className="bg-slate-50 text-slate-500 uppercase text-[11px] border-b border-slate-200 font-bold tracking-wider">
                 <tr>
-                  <th className="px-4 py-3 w-10 text-center">
+                  <th className="px-3 py-3 w-10 text-center">
                     <input
                       type="checkbox"
                       checked={selectedTxIds.size > 0 && selectedTxIds.size === sortedTransactions.length}
@@ -686,50 +872,56 @@ export default function TransactionsPage() {
                       title="Alle angezeigten Buchungen auswählen"
                     />
                   </th>
-                  <th className="px-5 py-3">
+                  <th className="px-3 py-3 w-24">
                     <button
                       type="button"
                       onClick={() => toggleSort('date')}
-                      className="inline-flex items-center gap-1 hover:text-slate-900 cursor-pointer uppercase font-semibold tracking-wider"
+                      className="inline-flex items-center gap-1 hover:text-slate-900 cursor-pointer uppercase font-bold tracking-wider"
                       title="Nach Datum sortieren"
                     >
                       <span>Datum</span>
                       {sortIndicator('date')}
                     </button>
                   </th>
-                  <th className="px-6 py-3">Empfänger & Auto-Regel</th>
-                  <th className="px-6 py-3">Verwendungszweck</th>
-                  <th className="px-6 py-3">
+                  <th className="px-4 py-3">Empfänger & Buchungsdetails</th>
+                  <th className="px-3 py-3 w-28 text-right">
                     <button
                       type="button"
                       onClick={() => toggleSort('amount')}
-                      className="inline-flex items-center gap-1 hover:text-slate-900 cursor-pointer uppercase font-semibold tracking-wider"
+                      className="inline-flex items-center justify-end gap-1 hover:text-slate-900 cursor-pointer uppercase font-bold tracking-wider w-full"
                       title="Nach Umsatzgröße sortieren"
                     >
                       <span>Betrag</span>
                       {sortIndicator('amount')}
                     </button>
                   </th>
-                  <th className="px-6 py-3">Kategorie (Einzel-Zuordnung)</th>
-                  <th className="px-6 py-3 text-right">Aktionen & KI</th>
+                  <th className="px-4 py-3 w-72 sm:w-80 text-right">Kategorie zuweisen</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {visibleTransactions.map((tx) => {
                   const isChecked = selectedTxIds.has(tx.id);
                   const isDoneHere = stickyIdsRef.current.has(tx.id) && !matchesCategoryFilter(tx);
+                  const isUncategorized = !tx.category;
+                  const { title: displayTitle, isFallback } = getSmartPayeeTitle(tx);
+                  const cleanedPurpose = cleanBankPurpose(tx.description);
+                  const isExpanded = expandedDescIds.has(tx.id);
+
                   return (
                     <tr
                       key={tx.id}
                       className={`transition ${
                         isChecked
-                          ? 'bg-blue-50/60 border-l-4 border-blue-500'
+                          ? 'bg-blue-50/60 border-l-4 border-l-blue-500'
                           : isDoneHere
-                          ? 'bg-emerald-50/50 border-l-4 border-emerald-400 opacity-75'
+                          ? 'bg-emerald-50/40 border-l-4 border-l-emerald-400'
+                          : isUncategorized
+                          ? 'bg-amber-50/25 hover:bg-amber-50/50'
                           : 'hover:bg-slate-50/80'
                       }`}
                     >
-                      <td className="px-4 py-4 text-center">
+                      {/* Checkbox */}
+                      <td className="px-3 py-3 text-center align-middle">
                         <input
                           type="checkbox"
                           checked={isChecked}
@@ -738,81 +930,112 @@ export default function TransactionsPage() {
                         />
                       </td>
 
-                      <td className="px-5 py-4 whitespace-nowrap text-slate-500 font-mono text-xs">
-                        {new Date(tx.date).toLocaleDateString('de-DE')}
+                      {/* Datum */}
+                      <td className="px-3 py-3 whitespace-nowrap text-slate-500 font-mono text-xs align-middle">
+                        {new Date(tx.date).toLocaleDateString('de-DE', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                        })}
                       </td>
 
-                      <td className="px-6 py-4 font-semibold text-slate-900">
-                        <div>{tx.payee || 'Unbekannt'}</div>
-                        {tx.iban && <div className="text-xs text-slate-400 font-mono mt-0.5">{tx.iban}</div>}
+                      {/* Empfänger + bereinigter 1-zeiliger Verwendungszweck + dezentes Regel-Badge */}
+                      <td className="px-4 py-3 align-middle min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-slate-900 text-sm truncate max-w-md">
+                            {displayTitle}
+                          </span>
 
-                        {/* Interactive Active Rule Banner / Badge with Edit & Delete */}
-                        {tx.matchedRule && (
-                          <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-100 text-indigo-800 text-[11px] font-medium shadow-2xs">
-                            <span>🧠 Auto-Regel: <b>{tx.matchedRule.pattern}</b></span>
+                          {isFallback && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                              Bankbuchung
+                            </span>
+                          )}
 
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditRuleModal(tx.matchedRule!)}
-                              title="Regel-Kategorie für alle verknüpften Buchungen anpassen"
-                              className="text-indigo-600 hover:text-blue-700 font-semibold underline text-[10px] ml-1 transition"
-                            >
-                              ✏️ Bearbeiten
-                            </button>
+                          {/* Dezentes 1-Zeilen-Regel-Badge statt riesigem lila Kasten */}
+                          {tx.matchedRule && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200/70 text-indigo-700 text-[11px] font-semibold">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditRuleModal(tx.matchedRule!)}
+                                title={`Automatische Regel "${tx.matchedRule.pattern}" bearbeiten`}
+                                className="hover:underline cursor-pointer flex items-center gap-1"
+                              >
+                                <span>⚡ Regel: {tx.matchedRule.pattern}</span>
+                                <span className="text-[10px] opacity-75">✏️</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRuleFromTx(tx)}
+                                title="Automatische Regel löschen"
+                                className="text-indigo-400 hover:text-rose-600 font-bold ml-0.5 cursor-pointer"
+                              >
+                                ✖
+                              </button>
+                            </span>
+                          )}
+                        </div>
 
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveRuleFromTx(tx)}
-                              title="Automatische Regel für diesen Lieferanten löschen"
-                              className="text-indigo-400 hover:text-rose-600 font-bold transition ml-0.5"
-                            >
-                              ✖
-                            </button>
-                          </div>
-                        )}
+                        {/* Bereinigter Verwendungszweck (Klick klappt vollen Bank-Rohtext + IBAN auf) */}
+                        <div
+                          onClick={() => toggleDescExpand(tx.id)}
+                          title="Klicken, um vollständige Bankdaten / IBAN ein- oder auszublenden"
+                          className="mt-0.5 text-xs text-slate-500 cursor-pointer hover:text-slate-700"
+                        >
+                          {isExpanded ? (
+                            <div className="mt-1 p-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 space-y-1 whitespace-normal break-words font-mono text-[11px]">
+                              <div>{tx.description}</div>
+                              {tx.iban && <div className="text-slate-400">IBAN: {tx.iban}</div>}
+                              <div className="text-[10px] text-blue-600 font-sans font-semibold">▲ Kompaktansicht</div>
+                            </div>
+                          ) : (
+                            <div className="truncate">
+                              {cleanedPurpose}
+                            </div>
+                          )}
+                        </div>
                       </td>
 
-                      <td className="px-6 py-4 max-w-md whitespace-normal break-words text-slate-600 text-xs">
-                        {tx.description}
-                      </td>
-
-                      <td className="px-6 py-4 whitespace-nowrap font-bold text-sm text-slate-900">
+                      {/* Betrag */}
+                      <td className="px-3 py-3 whitespace-nowrap font-extrabold text-sm text-slate-900 text-right tabular-nums align-middle">
                         {formatEuro(tx.amount)}
                       </td>
 
-                      {/* Direct Inline Category Selector (Single Transaction Change) */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <select
-                          value={tx.category?.id || 'uncategorized'}
-                          onChange={(e) => handleAssignCategoryDirect(tx.id, e.target.value, false)}
-                          className="px-3 py-1.5 rounded-xl text-xs font-semibold border transition focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                          style={{
-                            backgroundColor: tx.category ? `${tx.category.color}15` : '#fef3c7',
-                            color: tx.category ? tx.category.color : '#b45309',
-                            borderColor: tx.category ? `${tx.category.color}40` : '#fde68a',
-                          }}
-                        >
-                          <option value="uncategorized">🔍 Unkategorisiert (Offen)</option>
-                          {categories.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
+                      {/* Kategorie-Dropdown + Regel/KI-Button (Kompakt & nie abgeschnitten) */}
+                      <td className="px-4 py-3 whitespace-nowrap text-right align-middle">
+                        <div className="inline-flex items-center justify-end gap-1.5 w-full">
+                          <select
+                            value={tx.category?.id || 'uncategorized'}
+                            onChange={(e) => handleAssignCategoryDirect(tx.id, e.target.value, false)}
+                            className="w-48 sm:w-52 px-2.5 py-1.5 rounded-xl text-xs font-bold border transition focus:ring-2 focus:ring-blue-500 cursor-pointer truncate"
+                            style={{
+                              backgroundColor: tx.category ? `${tx.category.color}15` : '#fef3c7',
+                              color: tx.category ? tx.category.color : '#b45309',
+                              borderColor: tx.category ? `${tx.category.color}40` : '#f59e0b',
+                            }}
+                          >
+                            <option value="uncategorized">👉 Kategorie wählen (Offen)</option>
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
 
-                      <td className="px-6 py-4 whitespace-nowrap text-right">
-                        <button
-                          onClick={() => {
-                            setActiveTx(tx);
-                            setSelectedCatId(tx.category?.id || categories[0]?.id || '');
-                            setLearnRuleMode('single');
-                            setAiResult(null);
-                          }}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium rounded-lg transition"
-                        >
-                          ⚙️ Option & KI
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTx(tx);
+                              setSelectedCatId(tx.category?.id || categories[0]?.id || '');
+                              setLearnRuleMode('single');
+                              setAiResult(null);
+                            }}
+                            title="Dauerhafte Lieferanten-Regel erstellen oder Gemini KI fragen"
+                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer shrink-0"
+                          >
+                            🧠 Regel / KI
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
