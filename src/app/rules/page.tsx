@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+
+type RuleSortOption = 'count_desc' | 'alpha_asc' | 'newest';
 
 interface Category {
   id: string;
@@ -40,7 +42,10 @@ export default function RulesPage() {
   const [ruleSearchQuery, setRuleSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('all');
   const [filterType, setFilterType] = useState('all');
-  const [filterApproval, setFilterApproval] = useState<'all' | 'approved' | 'pending'>('approved');
+  const [filterApproval, setFilterApproval] = useState<'all' | 'approved' | 'pending'>('all');
+  const [ruleSortBy, setRuleSortBy] = useState<RuleSortOption>('count_desc');
+  const [visibleRuleCount, setVisibleRuleCount] = useState(80);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   // Form state (New Rule)
   const [selectedCatId, setSelectedCatId] = useState('');
@@ -78,9 +83,6 @@ export default function RulesPage() {
       const res = await fetch('/api/categories');
       const data = await res.json();
       setCategories(data.categories || []);
-      if (data.categories?.length > 0) {
-        setSelectedCatId(data.categories[0].id);
-      }
     } catch (e) {
       console.error(e);
     }
@@ -100,13 +102,21 @@ export default function RulesPage() {
       const res = await fetch('/api/rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ categoryId: selectedCatId, matchType, pattern, applyToExisting: true, isApproved: true }),
+        body: JSON.stringify({
+          categoryId: selectedCatId,
+          matchType,
+          pattern: pattern.trim(),
+          applyToExisting: true,
+          isApproved: true,
+        }),
       });
 
       const data = await res.json();
       if (data.success) {
         setPattern('');
-        setToastMsg(`✅ Regel "${pattern}" manuell angelegt, freigegeben & auf ${data.appliedCount} Umsätze angewendet!`);
+        setSelectedCatId('');
+        setShowCreateForm(false);
+        setToastMsg(`✅ Regel "${pattern.trim()}" angelegt & auf ${data.appliedCount} Umsätze angewendet!`);
         fetchRules(true);
       }
     } catch (e) {
@@ -121,13 +131,10 @@ export default function RulesPage() {
     const previousRules = [...rules];
 
     // 0ms Optimistic UI update
-    setRules((prev) =>
-      prev.map((r) => (r.id === rule.id ? { ...r, isApproved: true } : r))
-    );
+    setRules((prev) => prev.map((r) => (r.id === rule.id ? { ...r, isApproved: true } : r)));
     setToastMsg(`✅ Regel "${rule.pattern}" freigegeben & Buchungen zugeordnet!`);
 
     try {
-      // Nur offene Umsätze oder bereits dieser Regel-Kategorie zugeordnete Umsätze automatisch umstellen
       const txIds = rule.matchingTransactions
         .filter((t) => !t.category || t.category.id === rule.category?.id)
         .map((t) => t.id);
@@ -148,9 +155,10 @@ export default function RulesPage() {
       fetchRules(true);
     } catch (e) {
       console.error('Fehler beim Speichern der Regel:', e);
-      // Rollback to original state if server request failed!
       setRules(previousRules);
-      setToastMsg(`⚠️ Verbindungsfehler: Regel "${rule.pattern}" konnte nicht gespeichert werden. Änderung wurde wiederhergestellt.`);
+      setToastMsg(
+        `⚠️ Verbindungsfehler: Regel "${rule.pattern}" konnte nicht gespeichert werden. Änderung wurde wiederhergestellt.`
+      );
     }
   };
 
@@ -164,7 +172,8 @@ export default function RulesPage() {
     const safeMatching = (rule.matchingTransactions || []).filter(
       (t) => !t.category || t.category.id === rule.category?.id
     );
-    const defaultIds = safeMatching.length > 0 ? safeMatching.map((t) => t.id) : (rule.matchingTransactions || []).map((t) => t.id);
+    const defaultIds =
+      safeMatching.length > 0 ? safeMatching.map((t) => t.id) : (rule.matchingTransactions || []).map((t) => t.id);
     setSelectedTxIds(new Set(defaultIds));
   };
 
@@ -198,7 +207,6 @@ export default function RulesPage() {
     const ruleId = editingRule.id;
     const targetCat = categories.find((c) => c.id === targetCategoryId) || editingRule.category;
 
-    // 0ms Optimistic UI Update
     setRules((prev) =>
       prev.map((r) =>
         r.id === ruleId
@@ -215,7 +223,7 @@ export default function RulesPage() {
 
     setEditingRule(null);
     setShowInlineRejectOptions(false);
-    setToastMsg(`✅ Regel "${editPattern}" freigegeben & Buchungen neu kategorisiert!`);
+    setToastMsg(`✅ Regel "${editPattern}" gespeichert & ${selectedTxIds.size} Buchungen aktualisiert!`);
 
     try {
       const updateTransactionIds = Array.from(selectedTxIds);
@@ -239,7 +247,6 @@ export default function RulesPage() {
       fetchRules(true);
     } catch (e) {
       console.error(e);
-      // Rollback state if server request failed!
       setRules(previousRules);
       setToastMsg(`⚠️ Fehler beim Speichern der Regel "${editPattern}". Änderung wurde wiederhergestellt.`);
     }
@@ -253,7 +260,6 @@ export default function RulesPage() {
     const ruleId = editingRule.id;
     const rulePattern = editingRule.pattern;
 
-    // 0ms Optimistic Instant Removal from State
     setRules((prev) => prev.filter((r) => r.id !== ruleId));
     setEditingRule(null);
     setShowInlineRejectOptions(false);
@@ -276,35 +282,8 @@ export default function RulesPage() {
       fetchRules(true);
     } catch (e) {
       console.error(e);
-      // Rollback state if server request failed!
       setRules(previousRules);
       setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rulePattern}". Die Regel wurde wiederhergestellt.`);
-    }
-  };
-
-  // 0ms Direct Table Delete Button with Rollback
-  const handleDirectDelete = async (rule: Rule) => {
-    const previousRules = [...rules];
-
-    // 0ms Optimistic Removal
-    setRules((prev) => prev.filter((r) => r.id !== rule.id));
-    setToastMsg(`❌ Regel "${rule.pattern}" gelöscht.`);
-
-    try {
-      const res = await fetch(`/api/rules?id=${rule.id}&reset=false`, {
-        method: 'DELETE',
-      });
-
-      if (!res.ok) {
-        throw new Error('Fehler beim Löschen der Regel auf dem Server');
-      }
-
-      fetchRules(true);
-    } catch (e) {
-      console.error(e);
-      // Rollback state if server request failed!
-      setRules(previousRules);
-      setToastMsg(`⚠️ Server-Fehler beim Löschen der Regel "${rule.pattern}". Die Regel wurde wiederhergestellt.`);
     }
   };
 
@@ -313,34 +292,139 @@ export default function RulesPage() {
   };
 
   const pendingRules = rules.filter((r) => !r.isApproved);
-  const approvedRulesCount = rules.filter((r) => r.isApproved).length;
 
-  // Filter rules based on search and selected filters
-  const filteredRules = rules.filter((rule) => {
-    if (filterCategory !== 'all' && rule.category?.id !== filterCategory) return false;
-    if (filterType !== 'all' && rule.matchType !== filterType) return false;
-    if (filterApproval !== 'all') {
-      if (filterApproval === 'approved' && !rule.isApproved) return false;
-      if (filterApproval === 'pending' && rule.isApproved) return false;
-    }
-    if (ruleSearchQuery.trim()) {
-      const q = ruleSearchQuery.toLowerCase().trim();
-      const patternMatch = rule.pattern.toLowerCase().includes(q);
-      const catMatch = (rule.category?.name || '').toLowerCase().includes(q);
-      const typeMatch = rule.matchType.toLowerCase().includes(q);
-      if (!patternMatch && !catMatch && !typeMatch) return false;
-    }
-    return true;
-  });
+  // Filter & sort rules
+  const filteredRules = useMemo(() => {
+    const filtered = rules.filter((rule) => {
+      if (filterCategory !== 'all' && rule.category?.id !== filterCategory) return false;
+      if (filterType !== 'all' && rule.matchType !== filterType) return false;
+      if (filterApproval !== 'all') {
+        if (filterApproval === 'approved' && !rule.isApproved) return false;
+        if (filterApproval === 'pending' && rule.isApproved) return false;
+      }
+      if (ruleSearchQuery.trim()) {
+        const q = ruleSearchQuery.toLowerCase().trim();
+        const patternMatch = rule.pattern.toLowerCase().includes(q);
+        const catMatch = (rule.category?.name || '').toLowerCase().includes(q);
+        const typeMatch = rule.matchType.toLowerCase().includes(q);
+        if (!patternMatch && !catMatch && !typeMatch) return false;
+      }
+      return true;
+    });
+
+    return filtered.sort((a, b) => {
+      if (ruleSortBy === 'alpha_asc') {
+        return a.pattern.localeCompare(b.pattern, 'de');
+      }
+      if (ruleSortBy === 'newest') {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+      return (b.matchingCount || 0) - (a.matchingCount || 0) || a.pattern.localeCompare(b.pattern, 'de');
+    });
+  }, [rules, filterCategory, filterType, filterApproval, ruleSearchQuery, ruleSortBy]);
+
+  const visibleRules = useMemo(
+    () => filteredRules.slice(0, visibleRuleCount),
+    [filteredRules, visibleRuleCount]
+  );
+
+  useEffect(() => {
+    setVisibleRuleCount(80);
+  }, [filterCategory, filterType, filterApproval, ruleSearchQuery, ruleSortBy]);
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">🧠 Regelsystem & Freigabe-Zentrale</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Nur von Ihnen explizit freigegebene Regeln greifen für automatische Buchungen.
-        </p>
+    <div className="space-y-5 pb-16">
+      {/* 1. Kompakte Kopfzeile + Aufklappbares Formular für neue Regeln */}
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                🧠 Automatische Zuordnungs-Regeln
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700 text-xs font-bold">
+                {rules.length} Regeln aktiv
+              </span>
+            </div>
+            <p className="text-slate-500 text-xs sm:text-sm mt-0.5">
+              Verwalten Sie Ihre gespeicherten Lieferanten- und Suchbegriff-Regeln für die automatische Kategorisierung.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowCreateForm((prev) => !prev)}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition shadow-xs shrink-0 cursor-pointer flex items-center gap-2 ${
+              showCreateForm
+                ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            {showCreateForm ? '✕ Formular schließen' : '➕ Neue Regel anlegen'}
+          </button>
+        </div>
+
+        {/* Collapsible Create Form */}
+        {showCreateForm && (
+          <form
+            onSubmit={handleAddRule}
+            className="pt-4 border-t border-slate-100 bg-slate-50/70 p-4 rounded-xl border border-slate-200/80 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end animate-in fade-in duration-150"
+          >
+            <div className="sm:col-span-3">
+              <label className="block text-xs font-bold text-slate-700 mb-1">Wo soll gesucht werden?</label>
+              <select
+                value={matchType}
+                onChange={(e) => setMatchType(e.target.value as any)}
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="KEYWORD">🔍 Text & Empfänger (Stichwort)</option>
+                <option value="PAYEE">🏢 Nur Empfänger-Name</option>
+                <option value="IBAN">🏦 Exakte IBAN</option>
+              </select>
+            </div>
+
+            <div className="sm:col-span-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1">Suchbegriff / Lieferant / IBAN</label>
+              <input
+                type="text"
+                placeholder={matchType === 'IBAN' ? 'DE1234567890...' : 'z.B. Metro, Telekom oder Bike24'}
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="sm:col-span-3">
+              <label className="block text-xs font-bold text-slate-700 mb-1">Ziel-Kategorie</label>
+              <select
+                value={selectedCatId}
+                onChange={(e) => setSelectedCatId(e.target.value)}
+                className={`w-full px-3 py-2 border rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 cursor-pointer ${
+                  !selectedCatId
+                    ? 'bg-amber-50 border-amber-300 text-amber-900'
+                    : 'bg-white border-slate-300 text-slate-900'
+                }`}
+              >
+                <option value="">-- Kategorie wählen --</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="sm:col-span-2">
+              <button
+                type="submit"
+                disabled={addingRule || !pattern.trim() || !selectedCatId}
+                className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {addingRule ? 'Speichere...' : '💾 Speichern'}
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {toastMsg && (
@@ -352,264 +436,177 @@ export default function RulesPage() {
         </div>
       )}
 
-      {/* Pending Approval Alert Banner */}
+      {/* Pending Approval Alert Banner (nur sichtbar falls unbestätigte Vorschläge existieren) */}
       {pendingRules.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 p-6 rounded-2xl space-y-4 shadow-xs">
+        <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl space-y-3 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="text-base font-bold text-amber-950 flex items-center gap-2">
-              <span>⏳</span> {pendingRules.length} Regel-Vorschläge warten auf Ihre Prüfung & Freigabe
+            <span className="text-sm font-bold text-amber-950 flex items-center gap-2">
+              <span>⏳</span> {pendingRules.length} Regel-Vorschläge warten auf Ihre Prüfung
             </span>
             <button
-              onClick={() => setFilterApproval('pending')}
+              onClick={() => setFilterApproval(filterApproval === 'pending' ? 'all' : 'pending')}
               className="text-xs text-amber-900 font-bold underline hover:text-amber-950 cursor-pointer"
             >
-              Zeige alle {pendingRules.length} ausstehenden Vorschläge in der Tabelle ↓
+              {filterApproval === 'pending' ? 'Alle Regeln zeigen' : `Nur diese ${pendingRules.length} Vorschläge filtern`}
             </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-48 overflow-y-auto p-1">
-            {pendingRules.slice(0, 10).map((rule) => (
-              <div
-                key={rule.id}
-                className="bg-white p-4 rounded-xl border border-amber-200 flex items-center justify-between shadow-2xs transition-all duration-150"
-              >
-                <div>
-                  <span className="font-bold text-slate-900 block text-sm">{rule.pattern}</span>
-                  <span className="text-xs text-slate-500">
-                    Vorgeschlagen für: <b className="text-indigo-600">{rule.category?.name}</b> • {rule.matchingCount} Buchungen
-                  </span>
-                </div>
-
-                {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Ablehnen */}
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => openApprovalDetailModal(rule)}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    🔍 Details
-                  </button>
-
-                  <button
-                    onClick={() => handleApproveRuleDirect(rule)}
-                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition shadow-xs cursor-pointer"
-                  >
-                    ✅ Freigeben
-                  </button>
-
-                  <button
-                    onClick={() => openApprovalDetailModal(rule, undefined, true)}
-                    className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-bold rounded-lg transition border border-rose-200 cursor-pointer"
-                    title="Regel ablehnen / löschen"
-                  >
-                    ❌ Ablehnen
-                  </button>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
 
-      {/* Add New Rule Form */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        <h3 className="text-base font-bold text-slate-900">➕ Neue Manuelle Zuordnungsregel anlegen & freigeben</h3>
-        <form onSubmit={handleAddRule} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Muster-Typ</label>
-            <select
-              value={matchType}
-              onChange={(e) => setMatchType(e.target.value as any)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="KEYWORD">Stichwort / Text</option>
-              <option value="PAYEE">Lieferanten-Name</option>
-              <option value="IBAN">Exakte IBAN</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Suchmuster / Wert</label>
-            <input
-              type="text"
-              placeholder={matchType === 'IBAN' ? 'DE1234567890...' : 'z.B. Brauerei oder Metro'}
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Kategorie zuweisen</label>
-            <select
-              value={selectedCatId}
-              onChange={(e) => setSelectedCatId(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <button
-              type="submit"
-              disabled={addingRule || !pattern.trim()}
-              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition shadow-xs disabled:opacity-50 cursor-pointer"
-            >
-              {addingRule ? 'Speichere...' : 'Regel freigeben & anwenden'}
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* Rules Search & Filter Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col lg:flex-row gap-4 items-center justify-between shadow-xs">
-        {/* Live Search Input */}
-        <div className="flex items-center gap-3 w-full lg:w-72">
+      {/* 2. Aufgeräumte 1-Zeilen-Such- & Filterleiste */}
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200 flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between shadow-xs">
+        {/* Links: Breite, übersichtliche Suche */}
+        <div className="relative flex-1 max-w-md">
           <input
             type="text"
-            placeholder="🔍 Regel durchsuchen (Name, IBAN...)"
+            placeholder="🔍 Regel suchen (z.B. Telekom, Saulheim, KFZ...)"
             value={ruleSearchQuery}
             onChange={(e) => setRuleSearchQuery(e.target.value)}
-            className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 pr-7"
           />
+          {ruleSearchQuery && (
+            <button
+              type="button"
+              onClick={() => setRuleSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold cursor-pointer"
+              title="Suche leeren"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
-        {/* Status Tabs / Filter */}
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-          {/* Approval Filter Buttons */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-xl">
-            <button
-              onClick={() => setFilterApproval('approved')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                filterApproval === 'approved'
-                  ? 'bg-white text-emerald-800 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              ✅ Von mir freigegeben ({approvedRulesCount})
-            </button>
-            <button
-              onClick={() => setFilterApproval('pending')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                filterApproval === 'pending'
-                  ? 'bg-amber-500 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              ⏳ Wartet auf Freigabe ({pendingRules.length})
-            </button>
-            <button
-              onClick={() => setFilterApproval('all')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                filterApproval === 'all'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Alle ({rules.length})
-            </button>
-          </div>
+        {/* Rechts: Kategorie, Regel-Typ & Sortierung sauber in einer Reihe */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {pendingRules.length > 0 && (
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setFilterApproval('all')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
+                  filterApproval === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                }`}
+              >
+                Alle ({rules.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterApproval('pending')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition cursor-pointer ${
+                  filterApproval === 'pending' ? 'bg-amber-500 text-white shadow-2xs' : 'text-slate-600'
+                }`}
+              >
+                ⏳ Offen ({pendingRules.length})
+              </button>
+            </div>
+          )}
 
-          {/* Category Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Kategorie:</span>
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="all">Alle Kategorien</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Kategorie-Filter */}
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer max-w-[210px]"
+            title="Nach Kategorie filtern"
+          >
+            <option value="all">🏷️ Alle Kategorien ({categories.length})</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
 
-          {/* Match Type Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-semibold">Typ:</span>
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="all">Alle Typen</option>
-              <option value="IBAN">🏦 IBAN</option>
-              <option value="PAYEE">🏢 Lieferant</option>
-              <option value="KEYWORD">🔍 Stichwort</option>
-            </select>
-          </div>
+          {/* Typ-Filter */}
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            title="Nach Regel-Typ filtern"
+          >
+            <option value="all">🔎 Alle Regel-Typen</option>
+            <option value="KEYWORD">🔍 Stichwort (Text & Empfänger)</option>
+            <option value="PAYEE">🏢 Lieferanten-Name</option>
+            <option value="IBAN">🏦 Exakte IBAN</option>
+          </select>
+
+          {/* Sortierung */}
+          <select
+            value={ruleSortBy}
+            onChange={(e) => setRuleSortBy(e.target.value as RuleSortOption)}
+            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            title="Sortierung wählen"
+          >
+            <option value="count_desc">📊 Meiste Buchungen zuerst</option>
+            <option value="alpha_asc">🔤 Alphabetisch (A–Z)</option>
+            <option value="newest">🕒 Neueste zuerst</option>
+          </select>
         </div>
       </div>
 
-      {/* Active Rules List */}
+      {/* 3. Schlanke, übersichtliche Regeln-Tabelle (nichts mehr abgeschnitten!) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="text-lg font-bold text-slate-900">
-            {filterApproval === 'approved'
-              ? `✅ Von Ihnen freigegebene Regeln (${filteredRules.length})`
-              : filterApproval === 'pending'
-              ? `⏳ Ausstehende Regel-Vorschläge (${filteredRules.length})`
-              : `Alle Regelleisten (${filteredRules.length} von ${rules.length})`}
-          </h3>
-        </div>
-
         {loading ? (
           <div className="p-12 text-center text-slate-400 text-sm">Lade Regeln...</div>
         ) : filteredRules.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 text-sm">
-            Keine passenden Regeln für diesen Status oder Filter gefunden.
+          <div className="p-12 text-center space-y-3">
+            <div className="text-2xl">🔎</div>
+            <div className="text-slate-700 font-bold text-sm">Keine passenden Regeln für diese Filter gefunden.</div>
+            {(ruleSearchQuery || filterCategory !== 'all' || filterType !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setRuleSearchQuery('');
+                  setFilterCategory('all');
+                  setFilterType('all');
+                  setFilterApproval('all');
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Filter zurücksetzen
+              </button>
+            )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-700">
-              <thead className="bg-slate-50 text-slate-500 uppercase text-xs border-b border-slate-200 font-semibold tracking-wider">
+          <div>
+            <table className="w-full text-left text-sm text-slate-700 table-fixed">
+              <thead className="bg-slate-50 text-slate-500 uppercase text-[11px] border-b border-slate-200 font-bold tracking-wider">
                 <tr>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Muster-Typ</th>
-                  <th className="px-6 py-3">Suchbegriff / IBAN</th>
-                  <th className="px-6 py-3">Ziel-Kategorie</th>
-                  <th className="px-6 py-3">Verknüpfte Umsätze</th>
-                  <th className="px-6 py-3 text-right">Aktionen</th>
+                  <th className="px-5 py-3">Suchbegriff / Lieferant / IBAN</th>
+                  <th className="px-4 py-3 w-60 sm:w-64">Zugewiesene Kategorie</th>
+                  <th className="px-4 py-3 w-40 text-center">Erkannte Umsätze</th>
+                  <th className="px-5 py-3 w-44 text-right">Aktionen</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredRules.map((rule) => (
+                {visibleRules.map((rule) => (
                   <tr key={rule.id} className="hover:bg-slate-50/80 transition">
-                    <td className="px-6 py-4 whitespace-nowrap text-xs font-bold">
-                      {rule.isApproved ? (
-                        <span className="px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md">
-                          ✅ Freigegeben
+                    {/* Spalte 1: Suchbegriff + einzeiliges Typ-Badge */}
+                    <td className="px-5 py-3.5 align-middle min-w-0">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="font-bold text-slate-900 text-sm break-all">
+                          {rule.pattern}
                         </span>
-                      ) : (
-                        <span className="px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-md">
-                          ⏳ Wartet auf Freigabe
+                        <span className="px-2 py-0.5 bg-slate-100 border border-slate-200/70 rounded-md font-semibold text-[11px] text-slate-600 whitespace-nowrap shrink-0">
+                          {rule.matchType === 'IBAN'
+                            ? '🏦 IBAN'
+                            : rule.matchType === 'PAYEE'
+                            ? '🏢 Lieferant'
+                            : '🔍 Stichwort'}
                         </span>
-                      )}
+                        {!rule.isApproved && (
+                          <span className="px-2 py-0.5 bg-amber-100 border border-amber-200 text-amber-900 rounded-md text-[11px] font-bold whitespace-nowrap shrink-0">
+                            ⏳ Vorschlag
+                          </span>
+                        )}
+                      </div>
                     </td>
 
-                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                      <span className="px-2.5 py-1 bg-slate-100 rounded-md font-semibold text-slate-700">
-                        {rule.matchType === 'IBAN' ? '🏦 IBAN' : rule.matchType === 'PAYEE' ? '🏢 Lieferant' : '🔍 Stichwort'}
-                      </span>
-                    </td>
-
-                    <td className="px-6 py-4 font-bold text-slate-900">
-                      {rule.pattern}
-                    </td>
-
-                    {/* Direct Category Dropdown */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    {/* Spalte 2: Direktes Kategorie-Dropdown */}
+                    <td className="px-4 py-3.5 whitespace-nowrap align-middle">
                       <select
                         value={rule.category?.id || ''}
                         onChange={(e) => openApprovalDetailModal(rule, e.target.value)}
-                        className="px-3 py-1.5 rounded-xl text-xs font-semibold border transition focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                        className="w-full px-3 py-1.5 rounded-xl text-xs font-bold border transition focus:ring-2 focus:ring-blue-500 cursor-pointer truncate"
                         style={{
                           backgroundColor: `${rule.category?.color || '#3b82f6'}15`,
                           color: rule.category?.color || '#3b82f6',
@@ -624,46 +621,85 @@ export default function RulesPage() {
                       </select>
                     </td>
 
-                    {/* Linked Transactions Count Button */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    {/* Spalte 3: Verknüpfte Buchungen */}
+                    <td className="px-4 py-3.5 whitespace-nowrap text-center align-middle">
                       <button
+                        type="button"
                         onClick={() => openApprovalDetailModal(rule)}
-                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition flex items-center gap-1.5 cursor-pointer"
+                        title="Alle verknüpften Buchungen dieser Regel anzeigen"
+                        className={`px-3 py-1 rounded-full text-xs font-bold border transition inline-flex items-center gap-1.5 cursor-pointer ${
+                          rule.matchingCount > 0
+                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80'
+                            : 'bg-slate-50 hover:bg-slate-100 text-slate-400 border-slate-200'
+                        }`}
                       >
-                        <span>🔗 {rule.matchingCount} Buchungen</span>
-                        <span className="text-slate-400">→</span>
+                        <span>
+                          🔗 {rule.matchingCount} Buchung{rule.matchingCount === 1 ? '' : 'en'}
+                        </span>
                       </button>
                     </td>
 
-                    {/* Ordered: 🔍 Details | ✅ Freigeben | ❌ Löschen */}
-                    <td className="px-6 py-4 text-right space-x-2">
-                      <button
-                        onClick={() => openApprovalDetailModal(rule)}
-                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
-                      >
-                        🔍 Details
-                      </button>
+                    {/* Spalte 4: Kompakte Aktionen (nie abgeschnitten!) */}
+                    <td className="px-5 py-3.5 whitespace-nowrap text-right align-middle">
+                      <div className="inline-flex items-center justify-end gap-1.5">
+                        {!rule.isApproved && (
+                          <button
+                            type="button"
+                            onClick={() => handleApproveRuleDirect(rule)}
+                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
+                            title="Regel freigeben"
+                          >
+                            ✅
+                          </button>
+                        )}
 
-                      {!rule.isApproved && (
                         <button
-                          onClick={() => handleApproveRuleDirect(rule)}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition cursor-pointer"
+                          type="button"
+                          onClick={() => openApprovalDetailModal(rule)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition cursor-pointer"
+                          title="Suchbegriff, Kategorie oder betroffene Buchungen bearbeiten"
                         >
-                          ✅ Freigeben
+                          ✏️ Bearbeiten
                         </button>
-                      )}
 
-                      <button
-                        onClick={() => handleDirectDelete(rule)}
-                        className="text-red-500 hover:text-red-700 text-xs font-medium px-2 py-1 hover:bg-red-50 rounded-lg transition cursor-pointer"
-                      >
-                        Löschen
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => openApprovalDetailModal(rule, undefined, true)}
+                          className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 text-xs font-bold rounded-xl transition cursor-pointer"
+                          title="Regel löschen"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            {filteredRules.length > visibleRuleCount && (
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+                <span>
+                  Zeige <b>{visibleRuleCount}</b> von insgesamt <b>{filteredRules.length}</b> Regeln
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRuleCount((prev) => prev + 100)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl shadow-2xs transition cursor-pointer"
+                  >
+                    ➕ Weitere Regeln anzeigen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleRuleCount(filteredRules.length)}
+                    className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl border border-slate-200 transition cursor-pointer"
+                  >
+                    Alle ({filteredRules.length}) laden
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -675,7 +711,7 @@ export default function RulesPage() {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-bold text-slate-900">
-                  📋 Regel-Prüfung & Detailansicht: {editingRule.pattern}
+                  ⚙️ Regel bearbeiten: {editingRule.pattern}
                 </h3>
                 {!editingRule.isApproved && (
                   <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 text-xs font-bold rounded-md border border-amber-200">
@@ -698,15 +734,15 @@ export default function RulesPage() {
             <div className="space-y-3 shrink-0 bg-slate-50 p-4 rounded-xl border border-slate-200">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Muster-Typ</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Wo soll gesucht werden?</label>
                   <select
                     value={editMatchType}
                     onChange={(e) => setEditMatchType(e.target.value as any)}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold cursor-pointer"
                   >
-                    <option value="KEYWORD">Stichwort / Text</option>
-                    <option value="PAYEE">Lieferanten-Name</option>
-                    <option value="IBAN">Exakte IBAN</option>
+                    <option value="KEYWORD">🔍 Stichwort (Text & Empfänger)</option>
+                    <option value="PAYEE">🏢 Lieferanten-Name</option>
+                    <option value="IBAN">🏦 Exakte IBAN</option>
                   </select>
                 </div>
 
@@ -721,7 +757,7 @@ export default function RulesPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Ziel-Kategorie für Freigabe</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Ziel-Kategorie</label>
                   <select
                     value={targetCategoryId}
                     onChange={(e) => setTargetCategoryId(e.target.value)}
@@ -741,7 +777,7 @@ export default function RulesPage() {
             <div className="space-y-2 flex-1 overflow-hidden flex flex-col min-h-0 pt-2 border-t border-slate-100">
               <div className="flex items-center justify-between shrink-0">
                 <span className="text-xs font-bold text-slate-900">
-                  🔗 Verknüpfte Buchungen im Detail (Insgesamt {editingRule.matchingTransactions.length}):
+                  🔗 Verknüpfte Buchungen im Detail ({editingRule.matchingTransactions.length} Treffer):
                 </span>
                 <button
                   type="button"
@@ -765,25 +801,27 @@ export default function RulesPage() {
                     return (
                       <label
                         key={tx.id}
-                        className={`p-3.5 flex items-start justify-between text-xs cursor-pointer transition ${
+                        className={`p-3 flex items-start justify-between text-xs cursor-pointer transition ${
                           isChecked ? 'bg-blue-50/70 border-l-4 border-blue-500' : 'hover:bg-slate-50'
                         }`}
                       >
-                        <div className="flex items-start gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
                           <input
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => toggleTxSelection(tx.id)}
-                            className="mt-0.5 w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            className="mt-0.5 w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer shrink-0"
                           />
-                          <div className="space-y-1">
-                            <div className="font-bold text-slate-900 text-sm">
+                          <div className="space-y-0.5 min-w-0">
+                            <div className="font-bold text-slate-900 text-xs sm:text-sm truncate">
                               {tx.payee || 'Unbekannter Empfänger'}
-                              {tx.iban && <span className="ml-2 font-mono text-xs text-slate-400 font-normal">({tx.iban})</span>}
+                              {tx.iban && (
+                                <span className="ml-2 font-mono text-[11px] text-slate-400 font-normal">
+                                  ({tx.iban})
+                                </span>
+                              )}
                             </div>
-                            <div className="text-slate-600 text-xs leading-relaxed">
-                              <b>Verwendungszweck:</b> {tx.description}
-                            </div>
+                            <div className="text-slate-600 text-xs break-words">{tx.description}</div>
                             <div className="text-[11px] text-slate-400 font-mono">
                               Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
                             </div>
@@ -791,9 +829,11 @@ export default function RulesPage() {
                         </div>
 
                         <div className="text-right shrink-0 ml-4">
-                          <span className="font-extrabold text-sm text-slate-900 block">{formatEuro(tx.amount)}</span>
+                          <span className="font-extrabold text-sm text-slate-900 block tabular-nums">
+                            {formatEuro(tx.amount)}
+                          </span>
                           <span className="text-[10px] text-slate-500 px-2 py-0.5 rounded bg-slate-100 border border-slate-200 mt-1 inline-block">
-                            Aktuell: {tx.category?.name || 'Unkategorisiert'}
+                            {tx.category?.name || 'Unkategorisiert'}
                           </span>
                         </div>
                       </label>
@@ -806,18 +846,17 @@ export default function RulesPage() {
             {/* Unified Bottom Action Section */}
             <div className="pt-3 border-t border-slate-100 shrink-0 space-y-3">
               {showInlineRejectOptions ? (
-                /* Inline Expanded Rejection Choice Box directly inside the same modal */
                 <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 space-y-3 animate-in fade-in zoom-in-95 duration-150">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-rose-950 flex items-center gap-1.5">
-                      <span>❌</span> Wie möchten Sie die Regel "{editingRule.pattern}" ablehnen / löschen?
+                      <span>🗑️</span> Wie möchten Sie die Regel „{editingRule.pattern}“ löschen?
                     </span>
                     <button
                       type="button"
                       onClick={() => setShowInlineRejectOptions(false)}
                       className="text-xs font-semibold text-rose-700 hover:underline cursor-pointer"
                     >
-                      Zurück zu Aktionen
+                      Abbrechen
                     </button>
                   </div>
 
@@ -829,10 +868,10 @@ export default function RulesPage() {
                       className="p-3 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-left transition cursor-pointer shadow-2xs group"
                     >
                       <span className="font-bold text-xs text-slate-900 block group-hover:text-blue-600">
-                        📌 Kategorien BEIBEHALTEN
+                        📌 Kategorien der Umsätze BEIBEHALTEN
                       </span>
                       <span className="text-[11px] text-slate-500 block mt-0.5">
-                        Löscht die Regel, aber lässt die zugeordneten Buchungen unberührt.
+                        Löscht nur die Regel, lässt aber die bisherigen {editingRule.matchingTransactions.length} Umsätze zugeordnet.
                       </span>
                     </button>
 
@@ -843,34 +882,29 @@ export default function RulesPage() {
                       className="p-3 bg-white hover:bg-rose-100/70 border border-rose-300 rounded-xl text-left transition cursor-pointer shadow-2xs group"
                     >
                       <span className="font-bold text-xs text-rose-900 block">
-                        ↩️ Auf UNKATEGORISIERT zurücksetzen
+                        ↩️ Umsätze auf „Offen“ zurücksetzen
                       </span>
                       <span className="text-[11px] text-rose-700 block mt-0.5">
-                        Löscht die Regel UND setzt alle {editingRule.matchingTransactions.length} Buchungen zurück.
+                        Löscht die Regel UND setzt alle {editingRule.matchingTransactions.length} Umsätze auf Unkategorisiert zurück.
                       </span>
                     </button>
                   </div>
                 </div>
               ) : (
-                /* Default Action Bar */
                 <div className="flex items-center justify-between">
-                  <div className="text-xs text-slate-500 font-medium">
-                    {selectedTxIds.size} von {editingRule.matchingTransactions.length} Buchungen werden der Kategorie zugewiesen.
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInlineRejectOptions(true)}
+                    className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
+                  >
+                    🗑️ Regel löschen...
+                  </button>
 
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => setShowInlineRejectOptions(true)}
-                      className="px-3.5 py-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl text-xs font-bold transition border border-rose-200 cursor-pointer"
-                    >
-                      ❌ Regel ablehnen / löschen...
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => setEditingRule(null)}
-                      className="px-4 py-2 text-slate-600 text-sm font-medium hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                      className="px-4 py-2 text-slate-600 text-xs sm:text-sm font-medium hover:bg-slate-100 rounded-xl transition cursor-pointer"
                     >
                       Abbrechen
                     </button>
@@ -879,9 +913,9 @@ export default function RulesPage() {
                       type="button"
                       onClick={handleSaveAndApproveRule}
                       disabled={savingRule}
-                      className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+                      className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                     >
-                      {savingRule ? 'Speichere...' : `✅ Freigeben & ${selectedTxIds.size} Buchungen umstellen`}
+                      {savingRule ? 'Speichere...' : `💾 Speichern & ${selectedTxIds.size} Buchungen aktualisieren`}
                     </button>
                   </div>
                 </div>
