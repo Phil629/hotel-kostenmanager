@@ -535,6 +535,126 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Beliebter, übersichtlicher Zeitraum- & Jahresfilter direkt auf dem Dashboard */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        {/* Schritt 1: Schnellauswahl der Jahre */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
+            <span>📅 Zeitraum auswählen:</span>
+            {isRefreshing && (
+              <span className="text-[11px] font-medium text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-full animate-pulse">
+                Aktualisiere…
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedMonth('all')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                selectedMonth === 'all'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              <span>📊</span>
+              <span>Alle 4 Jahre</span>
+            </button>
+
+            {(data?.availableYears && data.availableYears.length > 0
+              ? data.availableYears
+              : ['2026', '2025', '2024', '2023']
+            ).map((year) => {
+              const isYearActive = activeFilterYear === year;
+              return (
+                <button
+                  key={year}
+                  type="button"
+                  onClick={() => setSelectedMonth(year)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                    isYearActive
+                      ? 'bg-slate-900 text-white shadow-xs ring-2 ring-blue-500'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <span>📅</span>
+                  <span>{year}</span>
+                  {year === '2026' && (
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
+                        isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      Aktuell
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Schritt 2: Spezifische Monate für das aktive Jahr */}
+        {activeFilterYear !== 'all' ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+            <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
+              <span>
+                Monate im Jahr <b>{activeFilterYear}</b>:
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSelectedMonth(activeFilterYear)}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  selectedMonth === activeFilterYear
+                    ? 'bg-blue-600 text-white shadow-2xs'
+                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
+                }`}
+              >
+                📌 Ganzes Jahr {activeFilterYear}
+              </button>
+
+              {['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'].map((mNum) => {
+                const ym = `${activeFilterYear}-${mNum}`;
+                const isSelected = selectedMonth === ym;
+                const monthName = shortGermanMonths[mNum] || mNum;
+                // Prüfen ob Daten vorliegen (falls availableMonths bereits geladen ist)
+                const hasData =
+                  !data?.availableMonths ||
+                  data.availableMonths.some((item) => item.value === ym);
+
+                return (
+                  <button
+                    key={ym}
+                    type="button"
+                    onClick={() => setSelectedMonth(ym)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                        : hasData
+                        ? 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
+                        : 'bg-slate-50/50 text-slate-400 hover:bg-slate-100 border border-slate-100'
+                    }`}
+                  >
+                    {monthName}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
+            <span>
+              💡 <i>Wählen Sie oben ein Jahr aus (z. B. 2026 oder 2025), um die einzelnen Monate aufzurufen.</i>
+            </span>
+            <span className="font-semibold text-slate-700">Gesamtauswertung aller Buchungen (2023–2026)</span>
+          </div>
+        )}
+      </div>
+
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">
           Lade Ausgaben-Statistiken...
