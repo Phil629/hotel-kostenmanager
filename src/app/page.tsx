@@ -63,9 +63,7 @@ interface StatsResponse {
 
 interface MovedTxInfo {
   tx: TransactionItem;
-  // Kategorie, in der die Buchung ursprünglich stand (dort bleibt sie als Platzhalter sichtbar)
   originCat: { id: string; name: string; color: string };
-  // Aktuelle neue Kategorie
   toCatId: string;
 }
 
@@ -81,14 +79,14 @@ export default function Dashboard() {
   const statsCacheRef = useRef<Record<string, StatsResponse>>({});
   const lastFetchTimeRef = useRef<number>(0);
 
-  // Limit für aufgeklappte Buchungen pro Kategorie (verhindert DOM-Verzögerung bei >100 Buchungen)
+  // Limit für aufgeklappte Buchungen pro Kategorie
   const [catRowLimits, setCatRowLimits] = useState<Record<string, number>>({});
 
-  // Zeitraum wird seitenübergreifend gemerkt (gleicher Schlüssel wie in HeaderNav und auf der Umsätze-Seite)
+  // Zeitraum wird seitenübergreifend gemerkt (mit HeaderNav geteilt)
   const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.period', 'latest');
   const [, setAvailableMonths] = usePersistentState<Array<{ value: string; label: string }>>('filter.availableMonths', []);
 
-  // Aufgeklappte Kategorien werden ebenfalls gemerkt
+  // Aufgeklappte Kategorien
   const [expandedCatList, setExpandedCatList] = usePersistentState<string[]>('dashboard.expandedCats', []);
   const expandedCatIds = useMemo(() => new Set(expandedCatList), [expandedCatList]);
 
@@ -98,7 +96,7 @@ export default function Dashboard() {
     'amount_desc'
   );
 
-  // Aufgeklappte Einzelbuchungs-Texte (damit lange PayPal-/Banktexte komplett lesbar sind)
+  // Aufgeklappte Einzelbuchungs-Texte
   const [expandedTxIds, setExpandedTxIds] = useState<Set<string>>(new Set());
   const [expandAllTxTexts, setExpandAllTxTexts] = usePersistentState<boolean>('dashboard.expandAllTxTexts', false);
 
@@ -111,17 +109,9 @@ export default function Dashboard() {
     });
   };
 
-  // Eingefrorene Reihenfolge der Kategorien: Beim Umbuchen springt nichts mehr hin und her.
   const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
-
-  // Umgebuchte Buchungen bleiben in ihrer alten Kategorie als Platzhalter stehen (mit "Rückgängig")
   const [movedTx, setMovedTx] = useState<Record<string, MovedTxInfo>>({});
-
-  // Anzahl laufender Umbuchungs-Requests (Refresh erst, wenn alle fertig sind)
   const pendingRequests = useRef(0);
-
-  // Jahr ergibt sich direkt aus dem gewählten Zeitraum
-  const activeFilterYear = selectedMonth === 'all' ? 'all' : selectedMonth.slice(0, 4);
 
   const shortGermanMonths: Record<string, string> = {
     '01': 'Januar',
@@ -138,10 +128,8 @@ export default function Dashboard() {
     '12': 'Dezember',
   };
 
-  // Toast / Notification Message
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  // Interactive Year Filter for Bar Chart
   const [activeChartYears, setActiveChartYears] = useState<string[]>([]);
   const [hoveredChartYear, setHoveredChartYear] = useState<string | null>(null);
   const [showAvgLines, setShowAvgLines] = useState<boolean>(true);
@@ -155,7 +143,7 @@ export default function Dashboard() {
   const toggleChartYear = (year: string) => {
     setActiveChartYears((prev) => {
       if (prev.includes(year)) {
-        if (prev.length === 1) return prev; // Keep at least one
+        if (prev.length === 1) return prev;
         return prev.filter((y) => y !== year);
       } else {
         return [...prev, year].sort().reverse();
@@ -170,10 +158,10 @@ export default function Dashboard() {
   };
 
   const yearColors: Record<string, string> = {
-    '2026': '#2563eb', // Royal Blue
-    '2025': '#334155', // Deep Slate
-    '2024': '#0ea5e9', // Sky Blue
-    '2023': '#10b981', // Emerald
+    '2026': '#2563eb',
+    '2025': '#334155',
+    '2024': '#0ea5e9',
+    '2023': '#10b981',
   };
 
   const getAllYearAverages = () => {
@@ -224,14 +212,12 @@ export default function Dashboard() {
     const cached = statsCacheRef.current[monthVal];
     if (!silent) {
       if (cached) {
-        // 0ms Sofort-Wechsel aus dem Client-Cache, während im Hintergrund aktualisiert wird
         setData(cached);
         setCategoryOrder((cached.pieChartData || []).map((c) => c.id));
         setMovedTx({});
         setLoading(false);
         setIsRefreshing(true);
       } else if (data) {
-        // Bestehendes Layout sichtbar lassen statt weißen Ladebildschirm zu zeigen
         setIsRefreshing(true);
       } else {
         setLoading(true);
@@ -245,7 +231,6 @@ export default function Dashboard() {
         cache: 'no-store',
       });
       const json: StatsResponse = await res.json();
-      // Während noch Umbuchungen laufen, keine (veralteten) Daten übernehmen
       if (silent && pendingRequests.current > 0) return;
 
       statsCacheRef.current[monthVal] = json;
@@ -261,12 +246,10 @@ export default function Dashboard() {
 
       const freshIds = (json.pieChartData || []).map((c) => c.id);
       if (!silent) {
-        // Neuer Zeitraum: Reihenfolge nach Betrag neu festlegen, Platzhalter verwerfen
         setCategoryOrder(freshIds);
         setMovedTx({});
         setCatRowLimits({});
       } else {
-        // Hintergrund-Aktualisierung: Reihenfolge beibehalten, neue Kategorien hinten anhängen
         setCategoryOrder((prev) => [...prev, ...freshIds.filter((id) => !prev.includes(id))]);
       }
     } catch (e) {
@@ -282,10 +265,9 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!monthReady) return; // erst laden, wenn der gemerkte Zeitraum bekannt ist
+    if (!monthReady) return;
     fetchStats(selectedMonth);
 
-    // Auto-refresh when tab or page regains focus (gedrosselt auf mind. 30s Abstand)
     const handleFocus = () => {
       if (Date.now() - lastFetchTimeRef.current > 30000) {
         fetchStats(selectedMonth, true);
@@ -299,7 +281,6 @@ export default function Dashboard() {
     const isOpen = expandedCatList.includes(catId);
     setExpandedCatList((prev) => (isOpen ? prev.filter((id) => id !== catId) : [...prev, catId]));
     if (isOpen) {
-      // Beim Zuklappen die Platzhalter dieser Kategorie aufräumen
       setMovedTx((prev) => {
         const next: Record<string, MovedTxInfo> = {};
         for (const [id, info] of Object.entries(prev)) {
@@ -310,7 +291,6 @@ export default function Dashboard() {
     }
   };
 
-  // Buchung lokal (sofort) von einer Kategorie in eine andere verschieben – ohne Neuladen
   const moveTxLocally = (prev: StatsResponse, txId: string, toCatId: string): StatsResponse => {
     let fromCatId: string | null = null;
     let movedItem: TransactionItem | null = null;
@@ -373,7 +353,6 @@ export default function Dashboard() {
   const handleRecategorizeTransaction = async (txId: string, newCategoryId: string) => {
     if (!data) return;
 
-    // Aktuelle Kategorie + Buchung finden
     let currentCat: PieCategoryData | null = null;
     let currentTx: TransactionItem | null = null;
     for (const cat of data.pieChartData) {
@@ -386,7 +365,6 @@ export default function Dashboard() {
     }
     if (!currentCat || !currentTx || currentCat.id === newCategoryId) return;
 
-    // Platzhalter in der Ursprungskategorie pflegen
     const fromCat = currentCat;
     const fromTx = currentTx;
     setMovedTx((prev) => {
@@ -394,14 +372,13 @@ export default function Dashboard() {
       const origin = existing ? existing.originCat : { id: fromCat.id, name: fromCat.name, color: fromCat.color };
       const next = { ...prev };
       if (origin.id === newCategoryId) {
-        delete next[txId]; // zurück an den Ursprung -> kein Platzhalter mehr nötig
+        delete next[txId];
       } else {
         next[txId] = { tx: fromTx, originCat: origin, toCatId: newCategoryId };
       }
       return next;
     });
 
-    // Sofortige lokale Aktualisierung (kein Ladeflackern, Reihenfolge bleibt)
     setData((prev) => {
       if (!prev) return prev;
       const updated = moveTxLocally(prev, txId, newCategoryId);
@@ -431,12 +408,10 @@ export default function Dashboard() {
       setToastMsg('❌ Speichern fehlgeschlagen – Daten werden neu geladen.');
     } finally {
       pendingRequests.current -= 1;
-      // Im Hintergrund mit dem Server abgleichen, sobald alle Umbuchungen gespeichert sind
       if (pendingRequests.current === 0) fetchStats(selectedMonth, true);
     }
   };
 
-  // Kategorien in eingefrorener Reihenfolge anzeigen (inkl. Kategorien, die gerade leer geworden sind)
   const displayCategories = useMemo<PieCategoryData[]>(() => {
     if (!data) return [];
     const byId = new Map(data.pieChartData.map((c) => [c.id, c]));
@@ -458,7 +433,6 @@ export default function Dashboard() {
     return result;
   }, [data, categoryOrder, movedTx]);
 
-  // Ist die angezeigte Reihenfolge nicht mehr nach Betrag sortiert?
   const isOrderStale = useMemo(() => {
     const visible = displayCategories.filter((c) => c.amount > 0);
     for (let i = 1; i < visible.length; i++) {
@@ -473,7 +447,6 @@ export default function Dashboard() {
     setMovedTx({});
   };
 
-  // Für Diagramm & Legende immer nach Betrag sortiert
   const pieSorted = useMemo(
     () => (data ? [...data.pieChartData].filter((c) => c.amount > 0).sort((a, b) => b.amount - a.amount) : []),
     [data]
@@ -512,7 +485,7 @@ export default function Dashboard() {
             )}
           </div>
           <p className="text-slate-500 text-sm mt-1">
-            Finanzübersicht & Auswertung des City Hotel Schottenhof
+            Finanzübersicht & Auswertung des City Hotel Schottenhof • Zeitraum oben in der Leiste änderbar
           </p>
         </div>
 
@@ -534,126 +507,6 @@ export default function Dashboard() {
           </button>
         </div>
       )}
-
-      {/* Beliebter, übersichtlicher Zeitraum- & Jahresfilter direkt auf dem Dashboard */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        {/* Schritt 1: Schnellauswahl der Jahre */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm">
-            <span>📅 Zeitraum auswählen:</span>
-            {isRefreshing && (
-              <span className="text-[11px] font-medium text-blue-600 bg-blue-50 border border-blue-200/60 px-2 py-0.5 rounded-full animate-pulse">
-                Aktualisiere…
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedMonth('all')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                selectedMonth === 'all'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <span>📊</span>
-              <span>Alle 4 Jahre</span>
-            </button>
-
-            {(data?.availableYears && data.availableYears.length > 0
-              ? data.availableYears
-              : ['2026', '2025', '2024', '2023']
-            ).map((year) => {
-              const isYearActive = activeFilterYear === year;
-              return (
-                <button
-                  key={year}
-                  type="button"
-                  onClick={() => setSelectedMonth(year)}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                    isYearActive
-                      ? 'bg-slate-900 text-white shadow-xs ring-2 ring-blue-500'
-                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
-                >
-                  <span>📅</span>
-                  <span>{year}</span>
-                  {year === '2026' && (
-                    <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
-                        isYearActive ? 'bg-blue-500 text-white' : 'bg-slate-200 text-slate-600'
-                      }`}
-                    >
-                      Aktuell
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Schritt 2: Spezifische Monate für das aktive Jahr */}
-        {activeFilterYear !== 'all' ? (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
-            <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
-              <span>
-                Monate im Jahr <b>{activeFilterYear}</b>:
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setSelectedMonth(activeFilterYear)}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                  selectedMonth === activeFilterYear
-                    ? 'bg-blue-600 text-white shadow-2xs'
-                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200/60'
-                }`}
-              >
-                📌 Ganzes Jahr {activeFilterYear}
-              </button>
-
-              {['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'].map((mNum) => {
-                const ym = `${activeFilterYear}-${mNum}`;
-                const isSelected = selectedMonth === ym;
-                const monthName = shortGermanMonths[mNum] || mNum;
-                // Prüfen ob Daten vorliegen (falls availableMonths bereits geladen ist)
-                const hasData =
-                  !data?.availableMonths ||
-                  data.availableMonths.some((item) => item.value === ym);
-
-                return (
-                  <button
-                    key={ym}
-                    type="button"
-                    onClick={() => setSelectedMonth(ym)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                      isSelected
-                        ? 'bg-blue-600 text-white shadow-2xs font-bold'
-                        : hasData
-                        ? 'bg-slate-50 text-slate-700 hover:bg-slate-200 border border-slate-200/60'
-                        : 'bg-slate-50/50 text-slate-400 hover:bg-slate-100 border border-slate-100'
-                    }`}
-                  >
-                    {monthName}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div className="text-xs text-slate-500 flex items-center justify-between pt-1">
-            <span>
-              💡 <i>Wählen Sie oben ein Jahr aus (z. B. 2026 oder 2025), um die einzelnen Monate aufzurufen.</i>
-            </span>
-            <span className="font-semibold text-slate-700">Gesamtauswertung aller Buchungen (2023–2026)</span>
-          </div>
-        )}
-      </div>
 
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">
@@ -693,27 +546,30 @@ export default function Dashboard() {
                 {formatEuro(data.summary.uncategorizedAmount)}
               </div>
               <div className="text-xs text-purple-600 mt-1 font-medium">
-                <Link href="/transactions?status=UNCATEGORIZED" className="hover:underline">
-                  Jetzt zuordnen →
-                </Link>
+                {data.summary.uncategorizedAmount > 0 ? (
+                  <Link href="/transactions?status=UNCATEGORIZED" className="hover:underline flex items-center gap-1">
+                    <span>Jetzt offene Buchungen zuordnen →</span>
+                  </Link>
+                ) : (
+                  <span>✅ Alle Buchungen für diesen Zeitraum zugeordnet</span>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Charts Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Donut Chart - Expenses per Category */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+          {/* Charts Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            {/* Left: Donut Chart with integrated Legend */}
+            <div className="lg:col-span-5 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <h3 className="text-lg font-bold text-slate-900">Kostenverteilung nach Kategorien</h3>
-                  <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-semibold">
-                    {selectedMonth === 'all' ? 'Alle Monate' : selectedMonth}
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-base font-bold text-slate-900">Ausgaben nach Kostenstellen</h3>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                    {pieSorted.length} Kategorien
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mb-4">Prozentualer Anteil an den Gesamtausgaben</p>
 
-                <div className="h-72 w-full">
+                <div className="h-64 w-full relative">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
@@ -721,76 +577,102 @@ export default function Dashboard() {
                         cx="50%"
                         cy="50%"
                         innerRadius={65}
-                        outerRadius={105}
-                        paddingAngle={3}
+                        outerRadius={95}
+                        paddingAngle={2}
                         dataKey="amount"
-                        isAnimationActive={false}
                       >
                         {pieSorted.map((entry) => (
                           <Cell key={`cell-${entry.id}`} fill={entry.color} />
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(val: any) => formatEuro(Number(val))}
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)' }}
+                        formatter={(value: any) => [`${formatEuro(Number(value))}`, 'Betrag']}
+                        contentStyle={{
+                          backgroundColor: '#0f172a',
+                          borderRadius: '12px',
+                          color: '#fff',
+                          border: 'none',
+                          fontSize: '12px',
+                        }}
                       />
                     </PieChart>
                   </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Legend Grid */}
-              <div className="grid grid-cols-2 gap-2 mt-4 pt-4 border-t border-slate-100 text-xs">
-                {pieSorted.map((item) => (
-                  <div key={item.name} className="flex items-center justify-between gap-2 p-1.5 rounded-lg hover:bg-slate-50">
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
-                      <span className="text-slate-700 font-medium truncate">{item.name}</span>
-                    </div>
-                    <span className="font-bold text-slate-900">{item.percentage}%</span>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-xs text-slate-400 font-medium">Summe</span>
+                    <span className="text-sm font-extrabold text-slate-800">
+                      {formatEuro(data.summary.totalExpense)}
+                    </span>
                   </div>
-                ))}
+                </div>
+
+                {/* Legend List */}
+                <div className="mt-4 space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                  {pieSorted.map((cat) => (
+                    <div
+                      key={cat.id}
+                      onClick={() => toggleCategoryExpand(cat.id)}
+                      className="flex items-center justify-between text-xs p-1.5 rounded-lg hover:bg-slate-50 cursor-pointer transition"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: cat.color }}
+                        />
+                        <span className="text-slate-700 font-medium truncate">{cat.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-slate-900 font-bold tabular-nums">
+                          {formatEuro(cat.amount)}
+                        </span>
+                        <span className="text-slate-400 text-[10px] tabular-nums w-9 text-right">
+                          {cat.percentage}%
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Bar Chart - Monthly Comparison with Unified Interactive Year KPI Cards */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+            {/* Right: Year Comparison Bar Chart */}
+            <div className="lg:col-span-7 bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
               <div>
-                {/* Clean Header Row */}
-                <div className="flex items-start justify-between gap-3 mb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900 tracking-tight">Monatlicher Ausgabenvergleich</h3>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Monatsverlauf & 4-Jahres-Vergleich (2023–2026)
+                    </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Gesamtkosten pro Monat (Jan–Dez) • Klicken Sie auf ein Jahr zum Ein-/Ausblenden
+                      Klicken Sie auf einen Monat im Balkendiagramm, um ihn direkt auszuwählen.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {activeChartYears.length < (data.availableYears?.length || 0) && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowAvgLines((prev) => !prev)}
+                      className={`text-xs px-2.5 py-1 rounded-lg border font-semibold transition cursor-pointer ${
+                        showAvgLines
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                      title="Monats-Durchschnittslinien im Diagramm ein-/ausblenden"
+                    >
+                      📈 Ø Linien
+                    </button>
+                    {activeChartYears.length < (data.availableYears?.length || 4) && (
                       <button
                         type="button"
                         onClick={selectAllChartYears}
-                        className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-[11px] transition cursor-pointer"
+                        className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition cursor-pointer"
                       >
                         Alle Jahre
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setShowAvgLines((prev) => !prev)}
-                      className={`px-2.5 py-1 rounded-lg font-semibold text-[11px] transition cursor-pointer border ${
-                        showAvgLines
-                          ? 'bg-slate-900 text-white border-slate-900'
-                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
-                      }`}
-                      title="Monatsdurchschnitts-Linien im Diagramm ein-/ausblenden"
-                    >
-                      -- Ø-Linien
-                    </button>
                   </div>
                 </div>
 
-                {/* Unified Interactive Year Filter + Legend + Monthly Average KPI Cards */}
+                {/* Year Legend */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
                   {data.availableYears?.map((year) => {
                     const isSelected = activeChartYears.includes(year);
@@ -864,7 +746,6 @@ export default function Dashboard() {
                             const mStr = String(mIdx + 1).padStart(2, '0');
                             const monthRow = data.barChartData?.[mIdx];
                             const sortedActive = [...activeChartYears].sort().reverse();
-                            // Wähle das neueste aktive Jahr, das in diesem Monat tatsächlich Umsätze (> 0) hat
                             const yearWithData = sortedActive.find(
                               (y) => monthRow && Number(monthRow[y] || 0) > 0
                             );
@@ -879,341 +760,268 @@ export default function Dashboard() {
                         dataKey="month"
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }}
-                        dy={6}
+                        tick={{ fontSize: 11, fill: '#64748b' }}
                       />
                       <YAxis
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fontSize: 11, fill: '#94a3b8' }}
-                        tickFormatter={(v) => (v === 0 ? '0 €' : `${Math.round(v / 1000)}k €`)}
+                        tick={{ fontSize: 10, fill: '#94a3b8' }}
+                        tickFormatter={(val) => `${Math.round(val / 1000)}k€`}
                       />
                       <Tooltip
-                        cursor={{ fill: '#f8fafc' }}
-                        content={({ active, payload, label }: any) => {
-                          if (active && payload && payload.length) {
-                            return (
-                              <div className="bg-slate-900/95 backdrop-blur-xs text-white p-3.5 rounded-xl shadow-xl text-xs space-y-2 border border-slate-700/80 min-w-[220px]">
-                                <div className="font-bold text-slate-100 border-b border-slate-700/80 pb-1.5 flex items-center justify-between">
-                                  <span>📅 {label}</span>
-                                  <span className="text-[10px] text-blue-400 font-normal">Klick öffnet Monat ↗</span>
-                                </div>
-                                <div className="space-y-1.5">
-                                  {payload.map((entry: any) => {
-                                    const year = entry.dataKey;
-                                    const val = Number(entry.value || 0);
-                                    const avg = yearAverages[year];
-                                    const diff = avg && val > 0 ? val - avg : 0;
-                                    return (
-                                      <div key={year} className="flex items-center justify-between gap-4 text-xs">
-                                        <div className="flex items-center gap-1.5">
-                                          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: entry.color }} />
-                                          <span className="font-semibold text-slate-300">{year}:</span>
-                                        </div>
-                                        <div className="text-right tabular-nums">
-                                          <span className="font-bold text-white">{formatEuroWhole(val)}</span>
-                                          {avg > 0 && val > 0 && (
-                                            <span className={`block text-[10px] ${diff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                                              {diff > 0 ? `+${formatEuroWhole(diff)} vs. Ø` : `${formatEuroWhole(diff)} vs. Ø`}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          }
-                          return null;
+                        formatter={(value: any, name: any) => [formatEuro(Number(value)), `Jahr ${name}`]}
+                        labelFormatter={(label) => `Monat: ${label}`}
+                        contentStyle={{
+                          backgroundColor: '#0f172a',
+                          borderRadius: '12px',
+                          color: '#fff',
+                          border: 'none',
+                          fontSize: '12px',
                         }}
                       />
 
-                      {/* Subtle dashed average lines for active years */}
                       {showAvgLines &&
                         activeChartYears.map((year) => {
-                          const avgVal = yearAverages[year];
-                          if (!avgVal) return null;
+                          const avg = yearAverages[year];
+                          if (!avg || avg <= 0) return null;
                           const color = yearColors[year] || '#64748b';
-                          const isHighlighted = hoveredChartYear === year;
-                          if (hoveredChartYear && !isHighlighted) return null;
-
                           return (
                             <ReferenceLine
-                              key={`ref-${year}`}
-                              y={avgVal}
+                              key={`avg-${year}`}
+                              y={avg}
                               stroke={color}
                               strokeDasharray="4 4"
-                              strokeWidth={isHighlighted ? 2.5 : 1.25}
-                              strokeOpacity={isHighlighted ? 0.95 : 0.45}
+                              strokeWidth={1.5}
+                              strokeOpacity={0.6}
                             />
                           );
                         })}
 
-                      {data.availableYears
-                        ?.filter((year) => activeChartYears.includes(year))
-                        .map((year) => {
-                          const color = yearColors[year] || '#64748b';
-                          const isDimmed = hoveredChartYear !== null && hoveredChartYear !== year;
-                          return (
-                            <Bar
-                              key={year}
-                              dataKey={year}
-                              fill={color}
-                              fillOpacity={isDimmed ? 0.25 : 0.92}
-                              radius={[4, 4, 0, 0]}
-                              name={year}
-                              maxBarSize={22}
-                              isAnimationActive={false}
-                            />
-                          );
-                        })}
+                      {activeChartYears.map((year) => (
+                        <Bar
+                          key={year}
+                          dataKey={year}
+                          fill={yearColors[year] || '#64748b'}
+                          radius={[4, 4, 0, 0]}
+                          opacity={hoveredChartYear ? (hoveredChartYear === year ? 1 : 0.35) : 0.9}
+                        />
+                      ))}
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
-
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                <span>💡 Tipp: Klicken Sie auf einen Monatsbalken, um direkt in die Monatsdetails zu wechseln.</span>
-                <span>Bewegen Sie die Maus über ein Jahr oben, um dessen Ø-Linie hervorzuheben.</span>
-              </div>
             </div>
           </div>
 
-          {/* Interactive Expandable Category Table with Direct Recategorization */}
+          {/* Collapsible Category Breakdown List */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Kategorie-Aufschlüsselung im Detail</h3>
-                <p className="text-xs text-slate-500">
-                  Klicken Sie auf eine Kategorie, um alle zugehörigen Buchungen aufzuklappen und direkt anzupassen.
+                <h3 className="text-lg font-bold text-slate-900">
+                  Kostenstellen-Aufschlüsselung & Einzelbuchungen
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Klicken Sie auf eine Kategorie, um alle darin enthaltenen Buchungen anzuzeigen und bei Bedarf sofort umzubuchen.
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="text-slate-500 font-medium">Einzelbuchungen:</span>
-                  <select
-                    value={txSortBy}
-                    onChange={(e) => setTxSortBy(e.target.value as any)}
-                    className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer"
-                  >
-                    <option value="amount_desc">💰 Umsatzgröße (größte zuerst)</option>
-                    <option value="amount_asc">💰 Umsatzgröße (kleinste zuerst)</option>
-                    <option value="date_desc">📅 Datum (neueste zuerst)</option>
-                    <option value="date_asc">📅 Datum (älteste zuerst)</option>
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setExpandAllTxTexts((prev) => !prev)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer border ${
-                    expandAllTxTexts
-                      ? 'bg-blue-50 border-blue-200 text-blue-700'
-                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                  title="Alle Verwendungszwecke vollständig mehrzeilig anzeigen"
-                >
-                  {expandAllTxTexts ? '📖 Alle Umsatztexte ausgeklappt' : '📄 Alle Umsatztexte ausklappen'}
-                </button>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
                 {isOrderStale && (
                   <button
                     type="button"
                     onClick={resortCategories}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition cursor-pointer"
-                    title="Reihenfolge bleibt beim Umbuchen stabil – hier nach Betrag neu sortieren"
+                    className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                    title="Kategorien nach aktuellem Betrag sortieren"
                   >
-                    ↕ Kategorien neu sortieren
+                    <span>🔄</span>
+                    <span>Nach Betrag ordnen</span>
                   </button>
                 )}
+
+                <select
+                  value={txSortBy}
+                  onChange={(e) => setTxSortBy(e.target.value as any)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none cursor-pointer"
+                  title="Sortierung der Buchungen innerhalb der Kategorien"
+                >
+                  <option value="amount_desc">💰 Höchste Beträge zuerst</option>
+                  <option value="amount_asc">💰 Kleinste Beträge zuerst</option>
+                  <option value="date_desc">🕒 Neueste Buchungen zuerst</option>
+                  <option value="date_asc">🕒 Älteste Buchungen zuerst</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => setExpandAllTxTexts((prev) => !prev)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    expandAllTxTexts
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                  title="Alle Buchungstexte vollständig anzeigen oder einkürzen"
+                >
+                  {expandAllTxTexts ? '📄 Texte kurz' : '📄 Texte lang'}
+                </button>
               </div>
             </div>
 
             <div className="divide-y divide-slate-100">
               {displayCategories.map((cat) => {
                 const isExpanded = expandedCatIds.has(cat.id);
+                const movedHere = Object.entries(movedTx).filter(([, info]) => info.originCat.id === cat.id);
+                const rowLimit = catRowLimits[cat.id] || 40;
 
-                // Echte Buchungen + Platzhalter für hier weg-verschobene Buchungen
-                type Row = { tx: TransactionItem; moved?: MovedTxInfo };
-                const ghostRows: Row[] = Object.values(movedTx)
-                  .filter((info) => info.originCat.id === cat.id)
-                  .map((info) => ({ tx: info.tx, moved: info }));
-                const rows: Row[] = [...cat.transactions.map((tx) => ({ tx })), ...ghostRows].sort((a, b) => {
-                  if (txSortBy === 'amount_asc') return Math.abs(a.tx.amount) - Math.abs(b.tx.amount);
-                  if (txSortBy === 'date_desc') return new Date(b.tx.date).getTime() - new Date(a.tx.date).getTime();
-                  if (txSortBy === 'date_asc') return new Date(a.tx.date).getTime() - new Date(b.tx.date).getTime();
-                  return Math.abs(b.tx.amount) - Math.abs(a.tx.amount);
+                const sortedTx = [...cat.transactions].sort((a, b) => {
+                  if (txSortBy === 'amount_desc') return Math.abs(b.amount) - Math.abs(a.amount);
+                  if (txSortBy === 'amount_asc') return Math.abs(a.amount) - Math.abs(b.amount);
+                  if (txSortBy === 'date_asc') return new Date(a.date).getTime() - new Date(b.date).getTime();
+                  return new Date(b.date).getTime() - new Date(a.date).getTime();
                 });
 
+                const visibleTx = sortedTx.slice(0, rowLimit);
+                const hasMore = sortedTx.length > rowLimit;
+
                 return (
-                  <div key={cat.id || cat.name} className="transition">
-                    {/* Category Row Header (Clickable Accordion) */}
-                    <button
-                      type="button"
+                  <div key={cat.id} className="transition-colors">
+                    <div
                       onClick={() => toggleCategoryExpand(cat.id)}
-                      className="w-full p-4 sm:px-6 flex items-center justify-between hover:bg-slate-50 text-left transition cursor-pointer"
+                      className="p-4 sm:p-5 flex items-center justify-between hover:bg-slate-50/80 cursor-pointer transition select-none"
                     >
-                      <div className="flex items-center gap-4 w-5/12">
-                        <span className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
-                        <div>
-                          <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                            {cat.name}
-                            <span className="text-xs font-normal text-slate-400">
-                              {isExpanded ? '▲' : '▼'}
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <span
+                          className="w-4 h-4 rounded-full shrink-0 shadow-xs"
+                          style={{ backgroundColor: cat.color }}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 text-sm truncate">{cat.name}</span>
+                            <span className="text-[11px] text-slate-400 font-medium shrink-0">
+                              ({cat.count} {cat.count === 1 ? 'Buchung' : 'Buchungen'})
                             </span>
-                          </span>
-                          <span className="text-xs text-slate-400">{cat.count} Buchungen</span>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="w-4/12 hidden sm:block">
-                        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
-                          <span>Anteil</span>
-                          <span className="font-bold text-slate-700">{cat.percentage}%</span>
+                      <div className="flex items-center gap-4 shrink-0">
+                        <div className="text-right">
+                          <div className="font-extrabold text-slate-900 text-sm tabular-nums">
+                            {formatEuro(cat.amount)}
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-semibold tabular-nums">
+                            {cat.percentage}%
+                          </div>
                         </div>
-                        <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full transition-all duration-500"
-                            style={{ width: `${cat.percentage}%`, backgroundColor: cat.color }}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="text-right flex items-center justify-end gap-4">
-                        <span className="font-bold text-slate-900 text-sm block tabular-nums">{formatEuro(cat.amount)}</span>
-                        <span className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition">
-                          {isExpanded ? 'Zuklappen ▲' : 'Aufklappen ▼'}
+                        <span className="text-slate-400 text-xs w-4 text-center">
+                          {isExpanded ? '▲' : '▼'}
                         </span>
                       </div>
-                    </button>
+                    </div>
 
-                    {/* Expanded Transactions List */}
                     {isExpanded && (
-                      <div className="bg-slate-50/70 p-4 sm:px-8 border-t border-b border-slate-200/80 space-y-3">
-                        <div className="flex items-center justify-between text-xs font-bold text-slate-700 mb-2">
-                          <span>📑 Einzelbuchungen der Kategorie "{cat.name}" ({cat.transactions.length}):</span>
-                          <span className="text-slate-400 font-normal">
-                            {ghostRows.length > 0
-                              ? 'Verschobene Buchungen verschwinden beim Zuklappen'
-                              : 'Direkte Kategorie-Anpassung möglich'}
-                          </span>
-                        </div>
+                      <div className="bg-slate-50/60 p-4 sm:p-6 border-t border-slate-100 space-y-3">
+                        {movedHere.map(([txId, info]) => {
+                          const targetCatName =
+                            info.toCatId === 'uncategorized'
+                              ? 'Unkategorisiert'
+                              : categories.find((c) => c.id === info.toCatId)?.name || 'andere Kategorie';
 
-                        {rows.length === 0 ? (
-                          <div className="p-4 text-center text-xs text-slate-400">
-                            Keine Buchungen in dieser Kategorie.
+                          return (
+                            <div
+                              key={`moved-${txId}`}
+                              className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-bold text-amber-900 shrink-0">↪️ Umgebucht:</span>
+                                <span className="text-amber-800 truncate">
+                                  {info.tx.payee || info.tx.description} ({formatEuro(info.tx.amount)})
+                                </span>
+                                <span className="text-amber-700 shrink-0 font-medium">
+                                  → nach <b>{targetCatName}</b>
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRecategorizeTransaction(txId, info.originCat.id)}
+                                className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg transition shrink-0 cursor-pointer text-[11px]"
+                              >
+                                ↩️ Rückgängig machen
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                        {cat.transactions.length === 0 ? (
+                          <div className="text-center py-6 text-xs text-slate-400">
+                            Keine Buchungen in dieser Kategorie vorhanden.
                           </div>
                         ) : (
-                          <>
-                            <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-2xs">
-                              {rows.slice(0, catRowLimits[cat.id] || 80).map(({ tx, moved }) => {
-                                const isGhost = !!moved;
-                                const justArrived = !isGhost && movedTx[tx.id]?.toCatId === cat.id;
-                                const targetCat = moved
-                                  ? moved.toCatId === 'uncategorized'
-                                    ? { name: 'Unkategorisiert', color: '#94a3b8' }
-                                    : categories.find((c) => c.id === moved.toCatId) || { name: 'Neue Kategorie', color: '#94a3b8' }
-                                  : null;
-                                return (
-                                  <div
-                                    key={`${isGhost ? 'ghost' : 'tx'}-${tx.id}`}
-                                    className={`p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition ${
-                                      isGhost
-                                        ? 'bg-slate-50/80'
-                                        : justArrived
-                                        ? 'bg-emerald-50/60 border-l-4 border-emerald-400'
-                                        : 'hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    <div
-                                      onClick={() => toggleTxTextExpand(tx.id)}
-                                      title="Klicken, um den gesamten Umsatztext ein- oder auszuklappen"
-                                      className={`space-y-1 flex-1 min-w-0 cursor-pointer select-text ${isGhost ? 'opacity-50' : ''}`}
-                                    >
-                                      <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
-                                        <span className={isGhost ? 'line-through' : ''}>{tx.payee || 'Unbekannter Empfänger'}</span>
-                                        {tx.iban && (
-                                          <span className="font-mono text-[11px] text-slate-400 font-normal">
-                                            ({tx.iban})
-                                          </span>
-                                        )}
-                                        {tx.description.length > 70 && !expandAllTxTexts && (
-                                          <span className="text-[11px] font-semibold text-blue-600 hover:underline">
-                                            {expandedTxIds.has(tx.id) ? '▲ Text einklappen' : '▼ Ganzen Text anzeigen'}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div
-                                        className={`text-slate-600 text-xs leading-relaxed ${
-                                          expandAllTxTexts || expandedTxIds.has(tx.id)
-                                            ? 'whitespace-normal break-words bg-slate-50 p-2 rounded-lg border border-slate-200/80 text-slate-800'
-                                            : 'truncate'
-                                        }`}
-                                      >
-                                        {tx.description}
-                                      </div>
-                                      <div className="text-[10px] text-slate-400 font-mono">
-                                        Datum: {new Date(tx.date).toLocaleDateString('de-DE')}
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
-                                      {isGhost && targetCat && (
-                                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-600">
-                                          → <span className="w-2 h-2 rounded-full" style={{ backgroundColor: targetCat.color }} />
-                                          {targetCat.name}
-                                        </span>
-                                      )}
-                                      {justArrived && (
-                                        <span className="text-[11px] font-semibold text-emerald-700">✓ neu zugeordnet</span>
-                                      )}
-                                      <span className={`font-extrabold text-sm text-slate-900 tabular-nums ${isGhost ? 'opacity-50' : ''}`}>
-                                        {formatEuro(tx.amount)}
+                          <div className="space-y-2">
+                            {visibleTx.map((tx) => {
+                              const isTextExpanded = expandAllTxTexts || expandedTxIds.has(tx.id);
+                              return (
+                                <div
+                                  key={tx.id}
+                                  className="p-3 bg-white rounded-xl border border-slate-200/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                >
+                                  <div className="min-w-0 flex-1 space-y-0.5">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-bold text-slate-900 text-xs">
+                                        {tx.payee || 'Unbekannter Empfänger'}
                                       </span>
-
-                                      {isGhost ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleRecategorizeTransaction(tx.id, cat.id)}
-                                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
-                                        >
-                                          ↩ Rückgängig
-                                        </button>
-                                      ) : (
-                                        <select
-                                          value={tx.categoryId || 'uncategorized'}
-                                          onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
-                                          className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 hover:border-blue-500 focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                                        >
-                                          <option value="uncategorized">❓ Unkategorisiert</option>
-                                          {categories.map((c) => (
-                                            <option key={c.id} value={c.id}>
-                                              {c.name}
-                                            </option>
-                                          ))}
-                                        </select>
-                                      )}
+                                      <span className="text-[10px] font-mono text-slate-400">
+                                        {new Date(tx.date).toLocaleDateString('de-DE')}
+                                      </span>
                                     </div>
+                                    <p
+                                      onClick={() => toggleTxTextExpand(tx.id)}
+                                      className={`text-xs text-slate-600 cursor-pointer ${
+                                        isTextExpanded ? 'break-words' : 'truncate'
+                                      }`}
+                                      title={tx.description}
+                                    >
+                                      {tx.description}
+                                    </p>
                                   </div>
-                                );
-                              })}
-                            </div>
-                            {rows.length > (catRowLimits[cat.id] || 80) && (
-                              <div className="text-center pt-1">
+
+                                  <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                                    <span className="font-extrabold text-slate-900 text-xs tabular-nums">
+                                      {formatEuro(tx.amount)}
+                                    </span>
+
+                                    <select
+                                      value={cat.id}
+                                      onChange={(e) => handleRecategorizeTransaction(tx.id, e.target.value)}
+                                      className="px-2.5 py-1 text-xs font-semibold rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-white cursor-pointer focus:outline-none"
+                                    >
+                                      <option value="uncategorized">⚠️ Unkategorisiert</option>
+                                      {categories.map((c) => (
+                                        <option key={c.id} value={c.id}>
+                                          {c.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+                              );
+                            })}
+
+                            {hasMore && (
+                              <div className="text-center pt-2">
                                 <button
                                   type="button"
                                   onClick={() =>
                                     setCatRowLimits((prev) => ({
                                       ...prev,
-                                      [cat.id]: (prev[cat.id] || 80) + 100,
+                                      [cat.id]: (prev[cat.id] || 40) + 60,
                                     }))
                                   }
-                                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition cursor-pointer shadow-2xs"
+                                  className="px-4 py-2 bg-slate-200/80 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
                                 >
-                                  ➕ Weitere Buchungen anzeigen ({catRowLimits[cat.id] || 80} von {rows.length} sichtbar)
+                                  Weitere {sortedTx.length - rowLimit} Buchungen in dieser Kategorie laden
                                 </button>
                               </div>
                             )}
-                          </>
+                          </div>
                         )}
                       </div>
                     )}
