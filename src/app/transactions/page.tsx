@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { usePersistentState } from '../../lib/usePersistentState';
+import AiMonthAuditModal from '../components/AiMonthAuditModal';
 
 type SortOption = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc';
 
@@ -117,6 +118,7 @@ export default function TransactionsPage() {
   const [visibleCount, setVisibleCount] = useState(100);
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [showAiAudit, setShowAiAudit] = useState(false);
 
   // Filters (werden seitenübergreifend gemerkt; Monat wird mit dem Dashboard & HeaderNav geteilt)
   const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.period', 'latest');
@@ -792,7 +794,17 @@ export default function TransactionsPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowAiAudit(true)}
+              className="px-4 py-2.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
+              title="Prüft offene Buchungen und Fehlzuordnungen für diesen Monat per KI"
+            >
+              <span>✨</span>
+              <span>Monat mit KI bereinigen</span>
+            </button>
+
             <input
               type="file"
               ref={fileInputRef}
@@ -806,10 +818,10 @@ export default function TransactionsPage() {
               className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm cursor-pointer transition shadow-xs flex items-center gap-2 ${
                 uploading
                   ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  : 'bg-slate-900 hover:bg-slate-800 text-white'
               }`}
             >
-              {uploading ? '🔄 Importiere Datei...' : '📥 Kontoauszug hochladen (CSV / CAMT)'}
+              {uploading ? '🔄 Importiere Datei...' : '📥 Kontoauszug hochladen'}
             </label>
           </div>
         </div>
@@ -843,13 +855,23 @@ export default function TransactionsPage() {
 
             <div className="flex items-center gap-3 shrink-0">
               {periodStats.openCount > 0 && selectedCategory !== 'uncategorized' && (
-                <button
-                  type="button"
-                  onClick={() => setSelectedCategory('uncategorized')}
-                  className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
-                >
-                  👉 Jetzt die {periodStats.openCount} offenen Umsätze anzeigen
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShowAiAudit(true)}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>✨</span>
+                    <span>Mit KI bereinigen</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory('uncategorized')}
+                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
+                  >
+                    👉 Nur offene ({periodStats.openCount})
+                  </button>
+                </>
               )}
               {selectedCategory === 'uncategorized' && (
                 <button
@@ -1870,6 +1892,17 @@ export default function TransactionsPage() {
           </div>
         );
       })()}
+
+      {/* KI-Monatsbereinigung & Prüflauf Modal */}
+      <AiMonthAuditModal
+        isOpen={showAiAudit}
+        onClose={() => setShowAiAudit(false)}
+        selectedMonth={selectedMonth}
+        categories={categories}
+        onApplied={() => {
+          fetchTransactions(true);
+        }}
+      />
     </div>
   );
 }

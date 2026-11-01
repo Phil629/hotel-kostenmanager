@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { usePersistentState } from '../lib/usePersistentState';
 import Link from 'next/link';
+import AiMonthAuditModal from './components/AiMonthAuditModal';
 import {
   PieChart,
   Pie,
@@ -74,6 +75,7 @@ export default function Dashboard() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showAiAudit, setShowAiAudit] = useState(false);
 
   // Client-Cache für bereits geladene Zeiträume (0ms Wechsel zwischen Monaten/Jahren)
   const statsCacheRef = useRef<Record<string, StatsResponse>>({});
@@ -489,10 +491,20 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setShowAiAudit(true)}
+            className="px-4 py-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
+            title="Prüft offene Buchungen und Fehlzuordnungen für diesen Monat per KI"
+          >
+            <span>✨</span>
+            <span>Monat mit KI bereinigen</span>
+          </button>
+
           <Link
             href="/transactions"
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-xl shadow-xs transition flex items-center gap-2"
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-xs transition flex items-center gap-2"
           >
             ➕ Kontoauszug hochladen
           </Link>
@@ -545,11 +557,21 @@ export default function Dashboard() {
               <div className="text-2xl font-bold text-slate-900 mt-3">
                 {formatEuro(data.summary.uncategorizedAmount)}
               </div>
-              <div className="text-xs text-purple-600 mt-1 font-medium">
+              <div className="text-xs text-purple-600 mt-1 font-medium flex items-center justify-between gap-2 flex-wrap">
                 {data.summary.uncategorizedAmount > 0 ? (
-                  <Link href="/transactions?status=UNCATEGORIZED" className="hover:underline flex items-center gap-1">
-                    <span>Jetzt offene Buchungen zuordnen →</span>
-                  </Link>
+                  <>
+                    <Link href="/transactions?status=UNCATEGORIZED" className="hover:underline flex items-center gap-1">
+                      <span>Offene Buchungen ansehen →</span>
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setShowAiAudit(true)}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                    >
+                      <span>✨</span>
+                      <span>Mit KI zuordnen</span>
+                    </button>
+                  </>
                 ) : (
                   <span>✅ Alle Buchungen für diesen Zeitraum zugeordnet</span>
                 )}
@@ -1032,6 +1054,17 @@ export default function Dashboard() {
           </div>
         </>
       )}
+
+      {/* KI-Monatsbereinigung & Prüflauf Modal */}
+      <AiMonthAuditModal
+        isOpen={showAiAudit}
+        onClose={() => setShowAiAudit(false)}
+        selectedMonth={selectedMonth}
+        categories={categories}
+        onApplied={() => {
+          fetchStats(selectedMonth, true);
+        }}
+      />
     </div>
   );
 }
