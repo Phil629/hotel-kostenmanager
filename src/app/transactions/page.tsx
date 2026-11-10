@@ -119,6 +119,41 @@ export default function TransactionsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [showAiAudit, setShowAiAudit] = useState(false);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+
+  const handleCheckDuplicates = async () => {
+    setCheckingDuplicates(true);
+    setUploadMessage(null);
+    try {
+      const res = await fetch('/api/transactions/deduplicate');
+      const data = await res.json();
+      if (!data.success) {
+        setUploadMessage(`❌ Fehler bei der Prüfung: ${data.error}`);
+        return;
+      }
+      if (data.isClean) {
+        setUploadMessage(`✅ Alles sauber: Keine doppelten Buchungen in der Datenbank gefunden (${data.totalScanned.toLocaleString('de-DE')} Buchungen geprüft).`);
+      } else {
+        const confirmClean = window.confirm(
+          `⚠️ Es wurden ${data.duplicateCount} doppelte Buchungen gefunden (${formatEuro(data.duplicatedExpense + data.duplicatedIncome)}).\n\nMöchten Sie diese Duplikate jetzt automatisch bereinigen?`
+        );
+        if (confirmClean) {
+          const cleanRes = await fetch('/api/transactions/deduplicate', { method: 'POST' });
+          const cleanData = await cleanRes.json();
+          if (cleanData.success) {
+            setUploadMessage(`✅ ${cleanData.removedCount} Duplikate erfolgreich entfernt!`);
+            fetchTransactions();
+          } else {
+            setUploadMessage(`❌ Fehler beim Bereinigen: ${cleanData.error}`);
+          }
+        }
+      }
+    } catch (e: any) {
+      setUploadMessage(`❌ Fehler bei der Duplikat-Prüfung: ${e.message}`);
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  };
 
   // Filters (werden seitenübergreifend gemerkt; Monat wird mit dem Dashboard & HeaderNav geteilt)
   const [selectedMonth, setSelectedMonth, monthReady] = usePersistentState<string>('filter.period', 'latest');
@@ -803,6 +838,17 @@ export default function TransactionsPage() {
             >
               <span>✨</span>
               <span>Monat mit KI bereinigen</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCheckDuplicates}
+              disabled={checkingDuplicates}
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs sm:text-sm rounded-xl transition flex items-center gap-2 cursor-pointer border border-slate-200"
+              title="Prüft die gesamte Datenbank auf doppelte Buchungen"
+            >
+              <span>🛡️</span>
+              <span>{checkingDuplicates ? 'Prüfe...' : 'Duplikate prüfen'}</span>
             </button>
 
             <input

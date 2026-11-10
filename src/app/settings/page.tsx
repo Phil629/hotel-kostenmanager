@@ -35,6 +35,48 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Deduplication state
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
+  const [dedupStatus, setDedupStatus] = useState<string | null>(null);
+
+  const handleScanDuplicates = async () => {
+    setCheckingDuplicates(true);
+    setDedupStatus(null);
+    try {
+      const res = await fetch('/api/transactions/deduplicate');
+      const data = await res.json();
+      if (!data.success) {
+        setDedupStatus(`❌ Fehler: ${data.error}`);
+      } else if (data.isClean) {
+        setDedupStatus(`✅ Alle ${data.totalScanned.toLocaleString('de-DE')} Buchungen geprüft: Keine Duplikate vorhanden. Datenbank ist 100% sauber.`);
+      } else {
+        setDedupStatus(`⚠️ ${data.duplicateCount} Duplikate gefunden (${(data.duplicatedExpense + data.duplicatedIncome).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}).`);
+      }
+    } catch (e: any) {
+      setDedupStatus(`❌ Fehler: ${e.message}`);
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  };
+
+  const handleCleanDuplicates = async () => {
+    setCleaningDuplicates(true);
+    try {
+      const res = await fetch('/api/transactions/deduplicate', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setDedupStatus(`✅ ${data.removedCount} Duplikate erfolgreich bereinigt. Aktueller Datenbestand: ${data.remainingTotal.toLocaleString('de-DE')} Buchungen.`);
+      } else {
+        setDedupStatus(`❌ Fehler: ${data.error}`);
+      }
+    } catch (e: any) {
+      setDedupStatus(`❌ Fehler: ${e.message}`);
+    } finally {
+      setCleaningDuplicates(false);
+    }
+  };
+
   const fetchSettings = async () => {
     try {
       const res = await fetch('/api/settings');
@@ -509,6 +551,48 @@ export default function SettingsPage() {
               className="w-full px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
             >
               ✉️ Jetzt per E-Mail senden
+            </button>
+          </div>
+        </div>
+
+        {/* Deduplication & Database Health Card */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4 md:col-span-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-slate-900">🛡️ Permanenter Duplikat-Schutz & Datenintegrität</h3>
+                <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-800 text-[11px] font-bold rounded-full">
+                  Aktiv
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Schützt vor doppelten Buchungen beim Import durch mehrstufigen Abgleich (SEPA EREF, normalisierter Buchungstext, Betrag und Buchungstag).
+              </p>
+            </div>
+          </div>
+
+          {dedupStatus && (
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700">
+              {dedupStatus}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-3 pt-1">
+            <button
+              type="button"
+              onClick={handleScanDuplicates}
+              disabled={checkingDuplicates || cleaningDuplicates}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition flex items-center gap-2 cursor-pointer border border-slate-200"
+            >
+              🔍 {checkingDuplicates ? 'Prüfe Datenbank...' : 'Jetzt auf Duplikate prüfen'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCleanDuplicates}
+              disabled={checkingDuplicates || cleaningDuplicates}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl transition flex items-center gap-2 cursor-pointer shadow-xs"
+            >
+              🧹 {cleaningDuplicates ? 'Bereinige...' : 'Duplikate automatisch bereinigen'}
             </button>
           </div>
         </div>

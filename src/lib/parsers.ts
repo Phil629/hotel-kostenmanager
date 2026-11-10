@@ -16,7 +16,21 @@ export interface RawParsedTransaction {
 export function generateRawHash(date: Date, amount: number, payee: string, description: string): string {
   const dateStr = date instanceof Date && !isNaN(date.getTime()) ? date.toISOString().split('T')[0] : '1970-01-01';
   const numAmount = typeof amount === 'number' && !isNaN(amount) ? amount : 0;
-  const payload = `${dateStr}_${numAmount.toFixed(2)}_${(payee || '').trim().toLowerCase()}_${(description || '').trim().toLowerCase()}`;
+
+  const cleanPayee = (payee || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  let cleanDesc = (description || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  // 1. If there is a SEPA End-to-End Reference (EREF), that is the most reliable unique identifier
+  const erefMatch = cleanDesc.match(/eref:\s*([a-z0-9\-_]+)/);
+  if (erefMatch) {
+    const payload = `${dateStr}_${numAmount.toFixed(2)}_${cleanPayee}_eref:${erefMatch[1]}`;
+    return crypto.createHash('sha256').update(payload).digest('hex');
+  }
+
+  // 2. Strip volatile trailing metadata like IBAN/BIC/ABWA which often varies between export formats
+  cleanDesc = cleanDesc.replace(/\s*(?:iban:\s*[a-z0-9]+|\bbic:\s*[a-z0-9]+|\babwa:\s*.*$|\banam:\s*.*$)/gi, '').trim();
+
+  const payload = `${dateStr}_${numAmount.toFixed(2)}_${cleanPayee}_${cleanDesc}`;
   return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
