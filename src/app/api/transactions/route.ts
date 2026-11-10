@@ -208,13 +208,41 @@ export async function POST(req: NextRequest) {
       include: { category: true },
     });
 
-    // 1. Bulk fetch existing hashes to prevent N+1 query
+    // 1. Bulk fetch existing hashes AND transactions in date range to prevent duplicates
     const rawHashes = rawTransactions.map((t) => t.rawHash);
+    const validDates = rawTransactions
+      .map((t) => (t.date instanceof Date && !isNaN(t.date.getTime()) ? t.date.getTime() : null))
+      .filter((d): d is number => d !== null);
+
+    const minDate = validDates.length > 0 ? new Date(Math.min(...validDates)) : new Date('2000-01-01');
+    const maxDate = validDates.length > 0 ? new Date(Math.max(...validDates)) : new Date('2100-01-01');
+
     const existingTxs = await prisma.transaction.findMany({
-      where: { rawHash: { in: rawHashes } },
-      select: { rawHash: true },
+      where: {
+        OR: [
+          { rawHash: { in: rawHashes } },
+          {
+            date: {
+              gte: minDate,
+              lte: maxDate,
+            },
+          },
+        ],
+      },
+      select: { id: true, rawHash: true, date: true, amount: true, payee: true, description: true },
     });
+
     const existingHashMap = new Set(existingTxs.map((t) => t.rawHash));
+
+    // Also build a fast lookup for date + amount to catch cross-format duplicates
+    const existingByDateAmount = new Map<string, Array<{ payee: string | null; description: string }>>();
+    for (const ex of existingTxs) {
+      const dKey = `${ex.date.toISOString().split('T')[0]}_${ex.amount.toFixed(2)}`;
+      if (!existingByDateAmount.has(dKey)) {
+        existingByDateAmount.set(dKey, []);
+      }
+      existingByDateAmount.get(dKey)!.push({ payee: ex.payee, description: ex.description });
+    }
 
     // 2. Prepare new transactions in memory
     const newTransactionsData = [];
@@ -224,8 +252,43 @@ export async function POST(req: NextRequest) {
         skippedCount++;
         continue;
       }
-      // Add to set to also avoid duplicates within the SAME file batch
+
+      // Check if duplicate with different formatting exists
+      const dKey = `${raw.date.toISOString().split('T')[0]}_${raw.amount.toFixed(2)}`;
+      const candidates = existingByDateAmount.get(dKey);
+      if (candidates && candidates.length > 0) {
+        const rawPayee = (raw.payee || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const rawDesc = (raw.description || '').trim().toLowerCase();
+        const rawEref = rawDesc.match(/eref:\s*([a-z0-9\-_]+)/)?.[1];
+
+        const isDuplicate = candidates.some((cand) => {
+          const candPayee = (cand.payee || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+          const candDesc = (cand.description || '').trim().toLowerCase();
+          const candEref = candDesc.match(/eref:\s*([a-z0-9\-_]+)/)?.[1];
+
+          if (rawEref && candEref && rawEref === candEref) return true;
+          if (rawPayee && candPayee && rawPayee === candPayee) {
+            const cleanRawDesc = rawDesc.replace(/[^a-z0-9]/g, '');
+            const cleanCandDesc = candDesc.replace(/[^a-z0-9]/g, '');
+            if (cleanRawDesc === cleanCandDesc || cleanRawDesc.startsWith(cleanCandDesc) || cleanCandDesc.startsWith(cleanRawDesc)) {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (isDuplicate) {
+          skippedCount++;
+          continue;
+        }
+      }
+
+      // Add to set and candidate map so duplicates within the SAME file batch are also caught
       existingHashMap.add(raw.rawHash);
+      if (!existingByDateAmount.has(dKey)) {
+        existingByDateAmount.set(dKey, []);
+      }
+      existingByDateAmount.get(dKey)!.push({ payee: raw.payee, description: raw.description });
 
       const match = await matchTransaction(raw.iban, raw.payee, raw.description, preloadedRules);
 
