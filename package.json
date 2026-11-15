@@ -11,7 +11,8 @@
     "build": "next build",
     "start": "next start",
     "db:push": "prisma db push",
-    "db:seed": "npx tsx prisma/seed.ts"
+    "db:seed": "npx tsx prisma/seed.ts",
+    "telegram:bot": "tsx scripts/telegram_poll.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
