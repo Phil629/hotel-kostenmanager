@@ -40,6 +40,32 @@ export default function SettingsPage() {
   const [cleaningDuplicates, setCleaningDuplicates] = useState(false);
   const [dedupStatus, setDedupStatus] = useState<string | null>(null);
 
+  // Telegram Webhook state
+  const [settingUpWebhook, setSettingUpWebhook] = useState(false);
+  const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
+
+  const handleSetupWebhook = async () => {
+    setSettingUpWebhook(true);
+    setWebhookStatus(null);
+    try {
+      const res = await fetch('/api/telegram/setup-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'set' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setWebhookStatus(`✅ Webhook erfolgreich aktiviert: ${data.message}`);
+      } else {
+        setWebhookStatus(`❌ Fehler: ${data.error || 'Webhook konnte nicht aktiviert werden.'}`);
+      }
+    } catch (e: any) {
+      setWebhookStatus(`❌ Fehler beim Aktivieren: ${e.message}`);
+    } finally {
+      setSettingUpWebhook(false);
+    }
+  };
+
   const handleScanDuplicates = async () => {
     setCheckingDuplicates(true);
     setDedupStatus(null);
@@ -459,13 +485,25 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-100">
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">
-              ✈️ Telegram Bot Konfiguration
-            </h3>
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                ✈️ Telegram Bot &amp; KI-Finanzassistent
+              </h3>
+              <span className="px-2 py-0.5 bg-sky-100 text-sky-800 text-[10px] font-bold rounded-full">
+                Privat &amp; Vertraulich
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Verbinden Sie Ihren persönlichen Telegram-Bot, um unterwegs Berichte zu erhalten oder der KI direkte Finanzfragen zu stellen.
+            </p>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Telegram Bot Token (@BotFather)</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Telegram Bot Token (von @BotFather)
+                </label>
                 <input
                   type="password"
                   placeholder="123456789:ABCdef..."
@@ -473,11 +511,14 @@ export default function SettingsPage() {
                   onChange={(e) => setTelegramToken(e.target.value)}
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono"
                 />
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Erstellen Sie einen Bot bei @BotFather in Telegram und fügen Sie den Token hier ein.
+                </span>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Telegram Chat-ID (Handy / Gruppe)
+                  Ihre persönliche Chat-ID
                 </label>
                 <input
                   type="text"
@@ -486,7 +527,35 @@ export default function SettingsPage() {
                   onChange={(e) => setTelegramChatId(e.target.value)}
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono"
                 />
+                <span className="text-[11px] text-slate-400 mt-1 block">
+                  Ihre ID (z.B. via @userinfobot auf Telegram). Nur diese ID hat Zugriff!
+                </span>
               </div>
+            </div>
+
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-xs text-emerald-950 flex items-start gap-2">
+              <span className="text-base shrink-0">🔒</span>
+              <div>
+                <b>100% Privatsphäre-Garantie:</b> Die Konversation mit dem Bot läuft ausschließlich im 1-zu-1-Chat auf Ihrem eigenen Smartphone. Kein Mitarbeiter und kein Fremder hat Zugriff auf Ihre Anfragen oder Antworten.
+              </div>
+            </div>
+
+            {webhookStatus && (
+              <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium text-slate-700">
+                {webhookStatus}
+              </div>
+            )}
+
+            <div className="pt-1 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSetupWebhook}
+                disabled={settingUpWebhook || !telegramToken}
+                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-xs rounded-xl transition flex items-center gap-2 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <span>🔗</span>
+                <span>{settingUpWebhook ? 'Verbinde mit Telegram...' : 'Webhook bei Telegram registrieren'}</span>
+              </button>
             </div>
           </div>
 
