@@ -1,7 +1,7 @@
 import { prisma } from './prisma';
 import { getActiveGeminiApiKey } from './invoiceMatcher';
 
-const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+const GEMINI_MODELS = ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'];
 
 // Tool declarations for Gemini Function Calling
 const TOOLS_DECLARATION = [
