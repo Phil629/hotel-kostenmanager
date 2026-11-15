@@ -1,7 +1,7 @@
 import { prisma } from './prisma';
 import { getActiveGeminiApiKey } from './invoiceMatcher';
 
-const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.5-flash'];
+const GEMINI_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
 
 // Tool declarations for Gemini Function Calling
 const TOOLS_DECLARATION = [
@@ -300,25 +300,25 @@ WICHTIG:
         // Check if Gemini wants to call a function
         const functionCallPart = parts.find((p: any) => p.functionCall);
         if (functionCallPart && functionCallPart.functionCall) {
-          const { name, args } = functionCallPart.functionCall;
+          const { name, args, id } = functionCallPart.functionCall;
 
           // Execute tool
           const toolResult = await executeTool(name, args);
 
-          // Add model response and tool response to history
-          conversationHistory.push({
-            role: 'model',
-            parts: [{ functionCall: { name, args } }],
-          });
+          // Add full model content (preserving thoughtSignature) and tool response to history
+          conversationHistory.push(content);
+
+          const fnResp: any = {
+            name,
+            response: { result: toolResult },
+          };
+          if (id) fnResp.id = id;
 
           conversationHistory.push({
-            role: 'function',
+            role: 'user',
             parts: [
               {
-                functionResponse: {
-                  name,
-                  response: { result: toolResult },
-                },
+                functionResponse: fnResp,
               },
             ],
           });

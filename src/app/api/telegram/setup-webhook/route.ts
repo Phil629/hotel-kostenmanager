@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
   try {
-    const { action, customUrl } = await req.json().catch(() => ({ action: 'set', customUrl: null }));
+    await req.json().catch(() => ({}));
 
     const settings = await prisma.settings.findUnique({
       where: { id: 'default' },
@@ -19,45 +19,25 @@ export async function POST(req: Request) {
       );
     }
 
-    if (action === 'delete') {
-      const resp = await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`);
-      const data = await resp.json();
-      return NextResponse.json({ success: data.ok, result: data });
-    }
+    // Sicherstellen, dass kein externer Webhook das 24/7-Polling auf dem Hetzner-Server blockiert
+    await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`);
 
-    if (action === 'info') {
-      const resp = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`);
-      const data = await resp.json();
-      return NextResponse.json({ success: data.ok, info: data.result });
-    }
+    const meResp = await fetch(`https://api.telegram.org/bot${botToken}/getMe`);
+    const meData = await meResp.json();
 
-    // Determine webhook URL
-    let webhookUrl = customUrl;
-    if (!webhookUrl) {
-      const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || 'localhost:3000';
-      const proto = req.headers.get('x-forwarded-proto') || (host.includes('localhost') ? 'http' : 'https');
-      webhookUrl = `${proto}://${host}/api/telegram/webhook`;
-    }
-
-    // Telegram requires HTTPS for public webhooks
-    const resp = await fetch(
-      `https://api.telegram.org/bot${botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}&allowed_updates=["message"]`
-    );
-    const data = await resp.json();
-
-    if (!data.ok) {
+    if (!meData.ok) {
       return NextResponse.json({
         success: false,
-        error: data.description || 'Telegram Fehler beim Setzen des Webhooks',
-        webhookUrl,
+        error: meData.description || 'Telegram Bot Token ungültig.',
       });
     }
 
+    const botUsername = meData.result?.username ? `@${meData.result.username}` : 'Telegram-Bot';
+
     return NextResponse.json({
       success: true,
-      message: `Telegram Webhook erfolgreich aktiviert auf ${webhookUrl}`,
-      webhookUrl,
-      result: data,
+      message: `${botUsername} ist aktiv verbunden (24/7 Live-Dienst für Bankumsätze, Umsatzberichte & Cockpitliste).`,
+      bot: meData.result,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
