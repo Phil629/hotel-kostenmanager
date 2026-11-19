@@ -107,5 +107,8 @@ model Settings {
   gmailAppPassword String?
   gmailFolder      String    @default("INBOX")
   lastGmailSyncAt  DateTime?
+  bankBalance      Float?
+  bankIban         String?
+  lastBankSyncAt   DateTime?
   updatedAt        DateTime  @updatedAt
 }

@@ -44,8 +44,8 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Run lightweight 4-year overview query + detailed period query in parallel
-    const [allDatesAndAmounts, filteredTransactions] = await Promise.all([
+    // Run lightweight 4-year overview query + detailed period query + settings (cached bank balance) in parallel
+    const [allDatesAndAmounts, filteredTransactions, settings] = await Promise.all([
       prisma.transaction.findMany({
         where: { amount: { lt: 0 } },
         select: { date: true, amount: true },
@@ -67,6 +67,7 @@ export async function GET(req: NextRequest) {
         },
         orderBy: { date: 'desc' },
       }),
+      prisma.settings.findUnique({ where: { id: 'default' } }).catch(() => null),
     ]);
 
     const monthNamesGerman: Record<string, string> = {
@@ -209,6 +210,12 @@ export async function GET(req: NextRequest) {
         resolvedMonth: month,
         pieChartData,
         barChartData,
+        liveBank: {
+          balance: (settings as any)?.bankBalance ?? null,
+          iban: (settings as any)?.bankIban ?? 'DE85550912000080114303',
+          lastBankSyncAt: (settings as any)?.lastBankSyncAt ?? null,
+          lastInvoiceSyncAt: settings?.lastGmailSyncAt ?? null,
+        },
       },
       {
         headers: {

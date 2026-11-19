@@ -60,6 +60,12 @@ interface StatsResponse {
     [key: string]: string | number;
   }>;
   availableYears: string[];
+  liveBank?: {
+    balance: number | null;
+    iban: string | null;
+    lastBankSyncAt: string | null;
+    lastInvoiceSyncAt: string | null;
+  };
 }
 
 interface MovedTxInfo {
@@ -535,7 +541,7 @@ export default function Dashboard() {
       ) : (
         <>
           {/* KPI Stat Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
               <div className="flex items-center justify-between text-slate-500 text-sm font-medium">
                 <span>Gesamtausgaben</span>
@@ -574,6 +580,26 @@ export default function Dashboard() {
                   </>
                 ) : (
                   <span>✅ Alle Buchungen für diesen Zeitraum zugeordnet</span>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-emerald-200/80 shadow-xs">
+              <div className="flex items-center justify-between text-slate-500 text-sm font-medium">
+                <span>Volksbank Kontostand</span>
+                <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg text-lg">🏦</span>
+              </div>
+              <div className="text-2xl font-bold text-emerald-700 mt-3">
+                {data.liveBank?.balance !== null && data.liveBank?.balance !== undefined
+                  ? formatEuro(data.liveBank.balance)
+                  : '—'}
+              </div>
+              <div className="text-xs text-slate-500 mt-1 flex items-center justify-between gap-2 flex-wrap">
+                <span>✅ Auto-Sync (08:00 & 20:00) + DATEV</span>
+                {data.liveBank?.lastBankSyncAt && (
+                  <span className="text-[11px] text-emerald-700 font-medium">
+                    Stand: {new Date(data.liveBank.lastBankSyncAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
                 )}
               </div>
             </div>
@@ -1001,8 +1027,21 @@ export default function Dashboard() {
                                       }`}
                                       title={tx.description}
                                     >
-                                      {tx.description}
+                                      {tx.description.includes(' | 📄')
+                                        ? tx.description.split(' | 📄')[0]
+                                        : tx.description}
                                     </p>
+                                    {tx.description.includes('📄') && (
+                                      <p
+                                        onClick={() => toggleTxTextExpand(tx.id)}
+                                        className={`text-xs text-emerald-700 font-medium cursor-pointer ${
+                                          isTextExpanded ? 'break-words' : 'truncate'
+                                        }`}
+                                        title={tx.description}
+                                      >
+                                        📄 {tx.description.split('📄').slice(1).join('📄').trim()}
+                                      </p>
+                                    )}
                                   </div>
 
                                   <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">

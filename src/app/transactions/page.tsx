@@ -1246,8 +1246,17 @@ export default function TransactionsPage() {
                               <div className="text-[10px] text-blue-600 font-sans font-semibold">▲ Kompaktansicht</div>
                             </div>
                           ) : (
-                            <div className="truncate">
-                              {cleanedPurpose}
+                            <div className="space-y-0.5">
+                              <div className="truncate">
+                                {cleanedPurpose.includes(' | 📄')
+                                  ? cleanedPurpose.split(' | 📄')[0]
+                                  : cleanedPurpose}
+                              </div>
+                              {tx.description.includes('📄') && (
+                                <div className="truncate text-emerald-700 font-medium">
+                                  📄 {tx.description.split('📄').slice(1).join('📄').trim()}
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
